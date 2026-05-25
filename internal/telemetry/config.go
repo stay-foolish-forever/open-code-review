@@ -58,7 +58,7 @@ func resolveEnv(cfg *Config) {
 	}
 }
 
-// telemetrySection matches the telemetry key in ~/.open-code-review/config.json.
+// telemetrySection matches the telemetry key in ~/.opencodereview/config.json.
 type telemetrySection struct {
 	Enabled      *bool   `json:"enabled,omitempty"`
 	Exporter     *string `json:"exporter,omitempty"`
@@ -121,11 +121,11 @@ func ResolveConfig(configPath string) Config {
 	return cfg
 }
 
-// HomeConfigPath returns the default path to ~/.open-code-review/config.json.
+// HomeConfigPath returns the default path to ~/.opencodereview/config.json.
 func HomeConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".open-code-review", "config.json")
+	return filepath.Join(home, ".opencodereview", "config.json")
 }

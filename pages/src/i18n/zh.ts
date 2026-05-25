@@ -70,7 +70,7 @@ export const zh: TranslationKeys = {
   'quickstart.step1Label1': '安装',
   'quickstart.step1Label2': '验证安装',
   'quickstart.step2Title': '配置',
-  'quickstart.step2Desc': '配置您的 LLM 信息，支持 Anthropic 和 OpenAI 兼容协议。配置文件位于 ~/.open-code-review/config.json。',
+  'quickstart.step2Desc': '配置您的 LLM 信息，支持 Anthropic 和 OpenAI 兼容协议。配置文件位于 ~/.opencodereview/config.json。',
   'quickstart.step2Label1': '配置 LLM',
   'quickstart.step2Label2': '配置语言（默认英文）',
   'quickstart.step2Label3': '验证配置',
@@ -104,7 +104,7 @@ export const zh: TranslationKeys = {
   'docs.installVerifyLabel': '验证安装',
 
   'docs.configTitle': '配置与验证',
-  'docs.configDesc': '管理 CLI 的配置设置，存储在 <code>~/.open-code-review/config.json</code>。',
+  'docs.configDesc': '管理 CLI 的配置设置，存储在 <code>~/.opencodereview/config.json</code>。',
   'docs.configCommand': '命令',
   'docs.configExample': '示例',
   'docs.configKeys': '支持的配置 Key',

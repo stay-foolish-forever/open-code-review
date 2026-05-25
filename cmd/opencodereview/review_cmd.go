@@ -57,7 +57,12 @@ func runReview(args []string) error {
 	planToolDefs := agent.BuildToolDefs(toolEntries, true)
 	mainToolDefs := agent.BuildToolDefs(toolEntries, false)
 
-	appCfg, err := LoadAppConfig(defaultConfigPath())
+	cfgPath, err := defaultConfigPath()
+	if err != nil {
+		return err
+	}
+
+	appCfg, err := LoadAppConfig(cfgPath)
 	if err != nil {
 		return fmt.Errorf("load app config: %w", err)
 	}
@@ -65,7 +70,7 @@ func runReview(args []string) error {
 		tpl.ApplyLanguage(appCfg.Language)
 	}
 
-	ep, err := llm.ResolveEndpoint(defaultConfigPath())
+	ep, err := llm.ResolveEndpoint(cfgPath)
 	if err != nil {
 		return fmt.Errorf("resolve LLM endpoint: %w", err)
 	}

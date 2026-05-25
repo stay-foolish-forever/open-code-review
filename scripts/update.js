@@ -20,7 +20,7 @@ const {
 const packageRoot = path.join(__dirname, "..");
 const binDir = path.join(packageRoot, "bin");
 const binaryPath = path.join(binDir, "opencodereview");
-const stateDir = path.join(os.homedir(), ".open-code-review");
+const stateDir = path.join(os.homedir(), ".opencodereview");
 const tsFile = path.join(stateDir, "last-update-check");
 const lockFile = path.join(stateDir, "update.lock");
 

@@ -21,17 +21,17 @@ type ResolvedEndpoint struct {
 
 // Environment variable names for OCR-specific configuration.
 const (
-	envOCRLLMURL     = "OCR_LLM_URL"
-	envOCRLLMToken   = "OCR_LLM_TOKEN"
-	envOCRLLMModel   = "OCR_LLM_MODEL"
+	envOCRLLMURL       = "OCR_LLM_URL"
+	envOCRLLMToken     = "OCR_LLM_TOKEN"
+	envOCRLLMModel     = "OCR_LLM_MODEL"
 	envOCRUseAnthropic = "OCR_USE_ANTHROPIC"
 )
 
 // Environment variable names from Claude Code configuration.
 const (
-	envCCBaseURL  = "ANTHROPIC_BASE_URL"
-	envCCToken    = "ANTHROPIC_AUTH_TOKEN"
-	envCCModel    = "ANTHROPIC_MODEL"
+	envCCBaseURL = "ANTHROPIC_BASE_URL"
+	envCCToken   = "ANTHROPIC_AUTH_TOKEN"
+	envCCModel   = "ANTHROPIC_MODEL"
 )
 
 // ResolveEndpoint reads from 4 strategy sources in priority order.
@@ -59,7 +59,7 @@ func ResolveEndpoint(configPath string) (ResolvedEndpoint, error) {
 		}
 	}
 
-	return ResolvedEndpoint{}, fmt.Errorf("no valid LLM endpoint configured; one of OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL, ~/.open-code-review/config.json, or ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_MODEL must be set")
+	return ResolvedEndpoint{}, fmt.Errorf("no valid LLM endpoint configured; one of OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL, ~/.opencodereview/config.json, or ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_MODEL must be set")
 }
 
 // tryOCREnv reads OCR-specific environment variables.

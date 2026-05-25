@@ -9,7 +9,7 @@ const os = require("os");
 const binaryPath = path.join(__dirname, "opencodereview");
 
 if (!process.env.OCR_NO_UPDATE) {
-  const stateDir = path.join(os.homedir(), ".open-code-review");
+  const stateDir = path.join(os.homedir(), ".opencodereview");
   const tsFile = path.join(stateDir, "last-update-check");
   const cooldownMs =
     (parseInt(process.env.OCR_UPDATE_INTERVAL, 10) || 60) * 60 * 1000;

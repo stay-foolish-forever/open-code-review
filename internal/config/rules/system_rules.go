@@ -134,13 +134,13 @@ func expandBraces(s string) []string {
 	return results
 }
 
-// ProjectRuleEntry is a single entry in .open-code-review/rule.json.
+// ProjectRuleEntry is a single entry in .opencodereview/rule.json.
 type ProjectRuleEntry struct {
 	Path string `json:"path"`
 	Rule string `json:"rule"`
 }
 
-// ProjectRule holds rules loaded from <repoDir>/.open-code-review/rule.json.
+// ProjectRule holds rules loaded from <repoDir>/.opencodereview/rule.json.
 type ProjectRule struct {
 	Rules   []ProjectRuleEntry `json:"rules"`
 	Include []string           `json:"include,omitempty"`
@@ -194,15 +194,15 @@ func (f *FileFilter) IsUserIncluded(path string) bool {
 // composedResolver implements Resolver with layered priority.
 type composedResolver struct {
 	custom  *ProjectRule // highest: --rule flag
-	project *ProjectRule // high: .open-code-review/rule.json
-	global  *ProjectRule // low: ~/.open-code-review/rule.json
+	project *ProjectRule // high: .opencodereview/rule.json
+	global  *ProjectRule // low: ~/.opencodereview/rule.json
 	system  *SystemRule  // lowest: embedded default
 }
 
 // NewResolver builds a Resolver with the following priority:
 //  1. Custom rule file specified via --rule flag (first match wins)
-//  2. Project-local .open-code-review/rule.json (first match wins)
-//  3. Global ~/.open-code-review/rule.json (first match wins)
+//  2. Project-local .opencodereview/rule.json (first match wins)
+//  3. Global ~/.opencodereview/rule.json (first match wins)
 //  4. Embedded system default rules
 //
 // It also returns a FileFilter with the merged include/exclude patterns from all layers.
@@ -267,7 +267,7 @@ func loadGlobalRule() (*ProjectRule, error) {
 	if err != nil {
 		return nil, nil
 	}
-	path := filepath.Join(home, ".open-code-review", "rule.json")
+	path := filepath.Join(home, ".opencodereview", "rule.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -295,7 +295,7 @@ func loadRuleFile(path string) (*ProjectRule, error) {
 }
 
 func loadProjectRule(repoDir string) (*ProjectRule, error) {
-	path := filepath.Join(repoDir, ".open-code-review", "rule.json")
+	path := filepath.Join(repoDir, ".opencodereview", "rule.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

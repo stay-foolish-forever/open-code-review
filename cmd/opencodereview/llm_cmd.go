@@ -25,12 +25,17 @@ func runLLM(args []string) error {
 }
 
 func runLLMTest() error {
-	appCfg, err := LoadAppConfig(defaultConfigPath())
+	cfgPath, err := defaultConfigPath()
+	if err != nil {
+		return err
+	}
+
+	appCfg, err := LoadAppConfig(cfgPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	ep, err := llm.ResolveEndpoint(defaultConfigPath())
+	ep, err := llm.ResolveEndpoint(cfgPath)
 	if err != nil {
 		return fmt.Errorf("resolve LLM endpoint: %w", err)
 	}

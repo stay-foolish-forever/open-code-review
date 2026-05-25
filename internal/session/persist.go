@@ -14,7 +14,7 @@ import (
 )
 
 // jsonlWriter streams session records to a JSONL file under
-// $HOME/.open-code-review/sessions/<encoded-repo-path>/<session-id>.jsonl.
+// $HOME/.opencodereview/sessions/<encoded-repo-path>/<session-id>.jsonl.
 // It is safe for concurrent use by multiple goroutines.
 type jsonlWriter struct {
 	mu        sync.Mutex
@@ -65,7 +65,7 @@ func (jw *jsonlWriter) open() error {
 		return fmt.Errorf("resolve home dir: %w", err)
 	}
 
-	sessionDir := filepath.Join(home, ".open-code-review", "sessions", encodeRepoPath(jw.repoDir))
+	sessionDir := filepath.Join(home, ".opencodereview", "sessions", encodeRepoPath(jw.repoDir))
 	if err := os.MkdirAll(sessionDir, 0755); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
@@ -141,16 +141,16 @@ func (jw *jsonlWriter) WriteLLMResponse(filePath string, taskType TaskType, cont
 	jw.mu.Lock()
 	defer jw.mu.Unlock()
 	rec := map[string]any{
-		"uuid":       uuid,
-		"parentUuid": jw.lastUUID,
-		"type":       "llm_response",
-		"sessionId":  jw.sessionID,
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
-		"filePath":   filePath,
-		"taskType":   string(taskType),
-		"model":      model,
-		"content":    content,
-		"tool_calls": toolCalls,
+		"uuid":        uuid,
+		"parentUuid":  jw.lastUUID,
+		"type":        "llm_response",
+		"sessionId":   jw.sessionID,
+		"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		"filePath":    filePath,
+		"taskType":    string(taskType),
+		"model":       model,
+		"content":     content,
+		"tool_calls":  toolCalls,
 		"duration_ms": duration.Milliseconds(),
 		"usage": map[string]int{
 			"prompt_tokens":     promptTokens,
@@ -169,17 +169,17 @@ func (jw *jsonlWriter) WriteToolCall(filePath string, taskType TaskType, toolNam
 	jw.mu.Lock()
 	defer jw.mu.Unlock()
 	rec := map[string]any{
-		"uuid":       uuid,
-		"parentUuid": jw.lastUUID,
-		"type":       "tool_call",
-		"sessionId":  jw.sessionID,
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
-		"filePath":   filePath,
-		"taskType":   string(taskType),
-		"tool_name":  toolName,
-		"arguments":  arguments,
-		"result":     result,
-		"ok":         ok,
+		"uuid":        uuid,
+		"parentUuid":  jw.lastUUID,
+		"type":        "tool_call",
+		"sessionId":   jw.sessionID,
+		"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		"filePath":    filePath,
+		"taskType":    string(taskType),
+		"tool_name":   toolName,
+		"arguments":   arguments,
+		"result":      result,
+		"ok":          ok,
 		"duration_ms": duration.Milliseconds(),
 	}
 	jw.writeRecordLocked(rec)

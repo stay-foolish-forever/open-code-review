@@ -8,13 +8,13 @@ import (
 	"strconv"
 )
 
-// Default config file location: ~/.open-code-review/config.json
-func defaultConfigPath() string {
+// Default config file location: ~/.opencodereview/config.json
+func defaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "open-code-review.json"
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(home, ".open-code-review", "config.json")
+	return filepath.Join(home, ".opencodereview", "config.json"), nil
 }
 
 func runConfig(args []string) error {
@@ -37,7 +37,10 @@ func runConfig(args []string) error {
 }
 
 func runConfigSet(key, value string) error {
-	configPath := defaultConfigPath()
+	configPath, err := defaultConfigPath()
+	if err != nil {
+		return err
+	}
 
 	cfg, err := loadOrCreateConfig(configPath)
 	if err != nil {
@@ -66,11 +69,11 @@ func runConfigSet(key, value string) error {
 	return nil
 }
 
-// Config represents the user-level configuration file (~/.open-code-review/config.json).
+// Config represents the user-level configuration file (~/.opencodereview/config.json).
 type Config struct {
-	Llm       LlmConfig         `json:"llm,omitempty"`
-	Language  string            `json:"language,omitempty"` // Output language, defaults to Chinese when empty
-	Telemetry *TelemetryConfig  `json:"telemetry,omitempty"` // Telemetry/observability settings
+	Llm       LlmConfig        `json:"llm,omitempty"`
+	Language  string           `json:"language,omitempty"`  // Output language, defaults to Chinese when empty
+	Telemetry *TelemetryConfig `json:"telemetry,omitempty"` // Telemetry/observability settings
 }
 
 type LlmConfig struct {
@@ -83,9 +86,9 @@ type LlmConfig struct {
 
 // TelemetryConfig holds telemetry-specific settings.
 type TelemetryConfig struct {
-	Enabled      bool   `json:"enabled,omitempty"`       // Master switch for telemetry
-	Exporter     string `json:"exporter,omitempty"`       // "console" or "otlp"
-	OTLPEndpoint string `json:"otlp_endpoint,omitempty"` // OTLP collector address
+	Enabled      bool   `json:"enabled,omitempty"`         // Master switch for telemetry
+	Exporter     string `json:"exporter,omitempty"`        // "console" or "otlp"
+	OTLPEndpoint string `json:"otlp_endpoint,omitempty"`   // OTLP collector address
 	ContentLog   bool   `json:"content_logging,omitempty"` // Include prompt/response content
 }
 

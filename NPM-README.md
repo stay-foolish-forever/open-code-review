@@ -29,7 +29,7 @@ ocr config set llm.url https://api.anthropic.com/v1/messages \
     && ocr config set language Chinese
 ```
 
-Config is stored in `~/.open-code-review/config.json`.
+Config is stored in `~/.opencodereview/config.json`.
 
 Or via environment variables:
 

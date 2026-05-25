@@ -70,7 +70,7 @@ export const en: TranslationKeys = {
   'quickstart.step1Label1': 'Install',
   'quickstart.step1Label2': 'Verify Installation',
   'quickstart.step2Title': 'Configure',
-  'quickstart.step2Desc': 'Configure your LLM info. Supports Anthropic and OpenAI-compatible protocols. Config file at ~/.open-code-review/config.json.',
+  'quickstart.step2Desc': 'Configure your LLM info. Supports Anthropic and OpenAI-compatible protocols. Config file at ~/.opencodereview/config.json.',
   'quickstart.step2Label1': 'Configure LLM',
   'quickstart.step2Label2': 'Configure Language (default English)',
   'quickstart.step2Label3': 'Verify Configuration',
@@ -104,7 +104,7 @@ export const en: TranslationKeys = {
   'docs.installVerifyLabel': 'Verify Installation',
 
   'docs.configTitle': 'Configuration & Verification',
-  'docs.configDesc': 'Manage CLI configuration settings, stored in <code>~/.open-code-review/config.json</code>.',
+  'docs.configDesc': 'Manage CLI configuration settings, stored in <code>~/.opencodereview/config.json</code>.',
   'docs.configCommand': 'Command',
   'docs.configExample': 'Example',
   'docs.configKeys': 'Supported Config Keys',

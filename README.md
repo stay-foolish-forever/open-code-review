@@ -73,7 +73,7 @@ export OCR_LLM_MODEL=claude-opus-4-6
 export OCR_USE_ANTHROPIC=true
 ```
 
-Config is stored in `~/.open-code-review/config.json`.
+Config is stored in `~/.opencodereview/config.json`.
 
 The tool also falls back to Claude Code environment variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) and parses `~/.zshrc` / `~/.bashrc` for those exports.
 
@@ -150,8 +150,8 @@ OCR resolves review rules using a four-layer priority chain. Each layer uses fir
 | Priority | Source | Path | Description |
 |----------|--------|------|-------------|
 | 1 (highest) | `--rule` flag | User-specified path | CLI explicit override |
-| 2 | Project config | `<repoDir>/.open-code-review/rule.json` | Per-project rules, can be committed to git |
-| 3 | Global config | `~/.open-code-review/rule.json` | User-wide personal preferences |
+| 2 | Project config | `<repoDir>/.opencodereview/rule.json` | Per-project rules, can be committed to git |
+| 3 | Global config | `~/.opencodereview/rule.json` | User-wide personal preferences |
 | 4 (lowest) | System default | Embedded `system_rules.json` | Built-in rules covering common languages and file types |
 
 ### Rule File Format
@@ -193,7 +193,7 @@ The review agent follows a **three-phase workflow**:
 
 ## Configuration Reference
 
-Config file: `~/.open-code-review/config.json`
+Config file: `~/.opencodereview/config.json`
 
 | Key | Type | Example |
 |-----|------|---------|
