@@ -302,6 +302,53 @@ make build-all  # 交叉编译（linux/amd64, linux/arm64, darwin/amd64, darwin/
 make dist       # 完整发布流水线
 ```
 
+## 集成到编程 Agent
+
+OCR 可以无缝集成到 AI 编程 Agent 中，作为斜杠命令使用，在 Agent 工作流中直接进行代码审查。
+
+### 方式一：作为 Skill 安装
+
+使用 `npx` 将 OCR skill 安装到项目中：
+
+```bash
+npx skills add alibaba/open-code-review --skill open-code-review
+```
+
+此命令从 [skills 注册表](skills/open-code-review/SKILL.md)安装 `open-code-review` skill，教会你的编程 Agent 如何调用 `ocr` 进行代码审查、按优先级分类问题，并可选择性地应用修复。
+
+### 方式二：作为 Claude Code Plugin 安装
+
+对于 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)，在 Claude Code 中通过以下命令安装命令插件：
+
+```bash
+/plugin marketplace add alibaba/open-code-review
+/plugin install open-code-review@open-code-review
+```
+
+此命令注册 `/open-code-review:review` 斜杠命令，运行 OCR 并自动过滤和修复问题。
+
+### 方式三：直接复制命令文件
+
+如果不想使用任何包管理器，可以直接复制命令文件，在 Claude Code 中使用 `/open-code-review` 斜杠命令。
+
+**项目级**（通过 git 与团队共享）：
+
+```bash
+mkdir -p .claude/commands
+curl -o .claude/commands/open-code-review.md \
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/.claude/commands/open-code-review.md
+```
+
+**用户级**（个人全局使用，适用于所有项目）：
+
+```bash
+mkdir -p ~/.claude/commands
+curl -o ~/.claude/commands/open-code-review.md \
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/.claude/commands/open-code-review.md
+```
+
+> **前置条件**：所有集成方式都需要安装 `ocr` CLI 并配置 LLM。参见上方[安装](#安装)和[配置 LLM](#1-配置-llm)。
+
 ## 许可证
 
 [Apache-2.0](LICENSE) — Copyright 2026 Alibaba

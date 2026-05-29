@@ -302,6 +302,53 @@ make build-all  # Cross-compile (linux/amd64, linux/arm64, darwin/amd64, darwin/
 make dist       # Full release pipeline
 ```
 
+## Integration into Coding Agents
+
+OCR can be seamlessly integrated into AI coding agents as a slash command, enabling code review directly within your agent workflow.
+
+### Option 1: Install as a Skill
+
+Use `npx` to install the OCR skill into your project:
+
+```bash
+npx skills add alibaba/open-code-review --skill open-code-review
+```
+
+This installs the `open-code-review` skill from the [skills registry](skills/open-code-review/SKILL.md), which teaches your coding agent how to invoke `ocr` for code review, classify issues by priority, and optionally apply fixes.
+
+### Option 2: Install as a Claude Code Plugin
+
+For [Claude Code](https://docs.anthropic.com/en/docs/claude-code), install the command plugin through the following command in Claude Code:
+
+```bash
+/plugin marketplace add alibaba/open-code-review
+/plugin install open-code-review@open-code-review
+```
+
+This registers the `/open-code-review:review` slash command, which runs OCR and automatically filters and fixes issues.
+
+### Option 3: Copy the Command File Directly
+
+For a quick setup without any package manager, simply copy the command file to use the `/open-code-review` slash command in Claude Code.
+
+**Project-level** (shared with team via git):
+
+```bash
+mkdir -p .claude/commands
+curl -o .claude/commands/open-code-review.md \
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/.claude/commands/open-code-review.md
+```
+
+**User-level** (personal global use across all projects):
+
+```bash
+mkdir -p ~/.claude/commands
+curl -o ~/.claude/commands/open-code-review.md \
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/.claude/commands/open-code-review.md
+```
+
+> **Prerequisite**: All integration methods require the `ocr` CLI to be installed and an LLM configured. See [Install](#install) and [Configure LLM](#1-configure-llm) above.
+
 ## License
 
 [Apache-2.0](LICENSE) — Copyright 2026 Alibaba
