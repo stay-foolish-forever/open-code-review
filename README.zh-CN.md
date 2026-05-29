@@ -292,6 +292,24 @@ ocr config set telemetry.otlp_endpoint localhost:4317
 
 设置 `telemetry.content_logging` 可在导出数据中包含 LLM 提示词和响应。
 
+## CI/CD 集成
+
+OCR 可以集成到 CI/CD 流水线中，在 Merge Request / Pull Request 时自动进行代码审查。
+
+CI 集成的核心命令：
+
+```bash
+ocr review \
+  --from "origin/main" \
+  --to "origin/feature-branch" \
+  --format json \
+  --audience agent
+```
+
+`--format json` 和 `--audience agent` 参数输出适合 CI 脚本解析的机器可读结果。
+
+集成示例请参见 [`examples/`](./examples/) 目录，包括 GitHub Actions 和 GitLab CI。
+
 ## 开发
 
 ```bash

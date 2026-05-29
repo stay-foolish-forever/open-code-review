@@ -1,0 +1,225 @@
+# OpenCodeReview - GitLab CI Merge Request Auto-Review Demo
+#
+# This pipeline automatically reviews Merge Requests using OpenCodeReview
+# and posts review comments (discussions) directly on the MR diff.
+#
+# Required CI/CD Variables (Settings → CI/CD → Variables):
+#   OCR_LLM_URL        - LLM API endpoint (e.g., https://api.openai.com/v1/chat/completions)
+#   OCR_LLM_AUTH_TOKEN - Authentication token for the LLM API (mark as "Masked")
+#   GITLAB_API_TOKEN   - GitLab Personal/Project Access Token with "api" scope
+#
+# Optional CI/CD Variables:
+#   OCR_LLM_MODEL      - Model name (default: gpt-4o)
+
+stages:
+  - review
+
+code-review:
+  stage: review
+  image: node:20
+  only:
+    - merge_requests
+  variables:
+    GIT_DEPTH: 0  # Full history needed for merge-base diff
+  script:
+    # Install OpenCodeReview
+    - npm install -g @alibaba-group/open-code-review
+
+    # Configure OCR
+    - mkdir -p ~/.open-code-review
+    # Gitlab CI/CD does not support confuring variables with value length less than 8, so you can't set use_anthropic as a CI variable
+    - |
+      ocr config set llm.url $OCR_LLM_URL
+      ocr config set llm.auth_token $OCR_LLM_AUTH_TOKEN
+      ocr config set llm.model $OCR_LLM_MODEL
+      ocr config set llm.use_anthropic false
+      ocr config set llm.extra_body '{"thinking": {"type": "disabled"}}'
+
+    # Run OCR review
+    - |
+      echo "Reviewing MR: ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME} against ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      ocr review \
+        --from "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}" \
+        --to "origin/${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}" \
+        --format json \
+        --audience agent \
+        > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
+      echo "OCR review completed."
+      cat /tmp/ocr-result.json
+
+    # Post review comments to MR
+    - |
+      python3 << 'PYTHON_SCRIPT'
+      import json
+      import os
+      import sys
+      import urllib.request
+      import urllib.error
+
+      GITLAB_URL = os.environ.get("CI_SERVER_URL", "https://gitlab.com")
+      PROJECT_ID = os.environ["CI_PROJECT_ID"]
+      MR_IID = os.environ["CI_MERGE_REQUEST_IID"]
+      API_TOKEN = os.environ["GITLAB_API_TOKEN"]
+      SOURCE_BRANCH = os.environ["CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"]
+      TARGET_BRANCH = os.environ["CI_MERGE_REQUEST_TARGET_BRANCH_NAME"]
+      COMMIT_SHA = os.environ["CI_COMMIT_SHA"]
+
+      API_BASE = f"{GITLAB_URL}/api/v4/projects/{PROJECT_ID}/merge_requests/{MR_IID}"
+
+      def api_request(endpoint, data=None, method="POST"):
+          """Make a GitLab API request."""
+          url = f"{API_BASE}{endpoint}"
+          headers = {
+              "PRIVATE-TOKEN": API_TOKEN,
+              "Content-Type": "application/json"
+          }
+          body = json.dumps(data).encode("utf-8") if data else None
+          req = urllib.request.Request(url, data=body, headers=headers, method=method)
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  return json.loads(resp.read().decode("utf-8"))
+          except urllib.error.HTTPError as e:
+              print(f"API error {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+              return None
+
+      def post_note(body):
+          """Post a general note/comment on the MR."""
+          return api_request("/notes", {"body": body})
+
+      def post_discussion(path, line, body, base_sha=None, start_sha=None, head_sha=None):
+          """Post an inline discussion on a specific file/line in the MR diff."""
+          position = {
+              "position_type": "text",
+              "new_path": path,
+              "old_path": path,
+              "new_line": line,
+              "base_sha": base_sha or TARGET_BRANCH,
+              "start_sha": start_sha or TARGET_BRANCH,
+              "head_sha": head_sha or COMMIT_SHA,
+          }
+          data = {
+              "body": body,
+              "position": position
+          }
+          return api_request("/discussions", data)
+
+      def format_comment(comment):
+          """Format a single review comment as markdown."""
+          body = comment.get("content", "")
+
+          existing = comment.get("existing_code", "")
+          suggestion = comment.get("suggestion_code", "")
+          if suggestion and existing:
+              body += "\n\n**Suggestion:**\n"
+              body += f"```suggestion:-0+0\n{suggestion}\n```"
+
+          return body
+
+      def format_comment_fallback(comment):
+          """Format a comment for fallback (non-inline) display."""
+          path = comment.get("path", "unknown")
+          start_line = comment.get("start_line", 0)
+          end_line = comment.get("end_line", 0)
+          content = comment.get("content", "")
+
+          md = f"### 📄 `{path}`"
+          if start_line and end_line:
+              md += f" (L{start_line}-L{end_line})"
+          md += f"\n\n{content}"
+
+          existing = comment.get("existing_code", "")
+          suggestion = comment.get("suggestion_code", "")
+          if suggestion and existing:
+              md += "\n\n<details><summary>💡 Suggested Change</summary>\n\n"
+              md += f"**Before:**\n```\n{existing}\n```\n\n"
+              md += f"**After:**\n```\n{suggestion}\n```\n\n"
+              md += "</details>"
+
+          return md
+
+      # --- Main ---
+
+      # Read OCR result (skip first line which is summary, not JSON)
+      try:
+          with open("/tmp/ocr-result.json", "r") as f:
+              next(f)  # Skip first line
+              result = json.load(f)
+      except (FileNotFoundError, json.JSONDecodeError) as e:
+          print(f"Failed to parse OCR output: {e}", file=sys.stderr)
+          stderr_content = ""
+          try:
+              with open("/tmp/ocr-stderr.log", "r") as f:
+                  stderr_content = f.read().strip()
+          except FileNotFoundError:
+              pass
+          if stderr_content:
+              post_note(f"⚠️ **OpenCodeReview** encountered an error:\n```\n{stderr_content}\n```")
+          sys.exit(0)
+
+      comments = result.get("comments", [])
+      warnings = result.get("warnings", [])
+
+      # No comments - post summary
+      if not comments:
+          message = result.get("message", "No comments generated. Looks good to me.")
+          post_note(f"✅ **OpenCodeReview**: {message}")
+          print("No review comments to post.")
+          sys.exit(0)
+
+      # Get MR diff metadata for position calculation
+      diff_refs = None
+      try:
+          versions_url = f"{API_BASE}/versions"
+          req = urllib.request.Request(versions_url, headers={"PRIVATE-TOKEN": API_TOKEN})
+          with urllib.request.urlopen(req) as resp:
+              versions = json.loads(resp.read().decode("utf-8"))
+          if versions:
+              latest = versions[0]
+              diff_refs = {
+                  "base_sha": latest.get("base_commit_sha", ""),
+                  "start_sha": latest.get("start_commit_sha", ""),
+                  "head_sha": latest.get("head_commit_sha", ""),
+              }
+      except Exception as e:
+          print(f"Warning: Could not fetch MR versions: {e}", file=sys.stderr)
+
+      # Post inline discussions for each comment
+      success_count = 0
+      failed_comments = []
+
+      for comment in comments:
+          path = comment.get("path", "")
+          end_line = comment.get("end_line", 0)
+          start_line = comment.get("start_line", end_line)
+          body = format_comment(comment)
+
+          if not path or not end_line:
+              failed_comments.append(comment)
+              continue
+
+          kwargs = {}
+          if diff_refs:
+              kwargs = diff_refs
+
+          result_resp = post_discussion(path, end_line, body, **kwargs)
+          if result_resp:
+              success_count += 1
+          else:
+              failed_comments.append(comment)
+
+      print(f"Successfully posted {success_count}/{len(comments)} inline comments.")
+
+      # Post fallback for any failed inline comments
+      if failed_comments:
+          fallback_body = f"🔍 **OpenCodeReview** found issues that could not be posted inline:\n\n---\n\n"
+          for comment in failed_comments:
+              fallback_body += format_comment_fallback(comment) + "\n\n---\n\n"
+          post_note(fallback_body)
+
+      # Post summary
+      summary = f"🔍 **OpenCodeReview** found **{len(comments)}** issue(s) in this MR."
+      if warnings:
+          summary += f"\n\n⚠️ {len(warnings)} warning(s) occurred during review."
+      post_note(summary)
+
+      PYTHON_SCRIPT
