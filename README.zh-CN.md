@@ -336,7 +336,7 @@ npx skills add alibaba/open-code-review --skill open-code-review
 ```bash
 mkdir -p .claude/commands
 curl -o .claude/commands/open-code-review.md \
-  https://raw.githubusercontent.com/alibaba/open-code-review/main/.claude/commands/open-code-review.md
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/plugins/open-code-review/commands/review.md
 ```
 
 **用户级**（个人全局使用，适用于所有项目）：
@@ -344,7 +344,7 @@ curl -o .claude/commands/open-code-review.md \
 ```bash
 mkdir -p ~/.claude/commands
 curl -o ~/.claude/commands/open-code-review.md \
-  https://raw.githubusercontent.com/alibaba/open-code-review/main/.claude/commands/open-code-review.md
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/plugins/open-code-review/commands/review.md
 ```
 
 > **前置条件**：所有集成方式都需要安装 `ocr` CLI 并配置 LLM。参见上方[安装](#安装)和[配置 LLM](#1-配置-llm)。
