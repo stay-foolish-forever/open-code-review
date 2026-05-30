@@ -15,15 +15,53 @@
 
 ---
 
-AI-powered code review CLI that reads Git diffs, sends changed files to a configurable LLM via an agent with tool-use capabilities, and generates structured review comments with line-level precision.
+## What is Open Code Review?
 
-The agent can read full file contents, search the codebase, inspect other changed files for context, and produce deep reviews — not just surface-level diff feedback.
+Open Code Review is an AI-powered code review CLI tool. It originated as Alibaba Group's internal official AI code review assistant — over the past two years, it has served tens of thousands of developers and identified millions of code defects. After thorough validation at massive scale, we incubated it into an open source project for the community. Simply configure a model endpoint to get started.
 
-![Open Benchmark](imgs/open-benchmark.png)
+It reads Git diffs, sends changed files to a configurable LLM via an agent with tool-use capabilities, and generates structured review comments with line-level precision. The agent can read full file contents, search the codebase, inspect other changed files for context, and produce deep reviews — not just surface-level diff feedback.
 
-## Install
+![Highlights](imgs/highlights-en.png)
 
-### Via NPM (Recommended)
+## Why Open Code Review?
+
+### The Problem with General-Purpose Agents
+
+If you've used general-purpose agents like Claude Code with Skills for code review, you've likely encountered these pain points:
+
+- **Incomplete coverage** — On larger changesets, agents tend to "cut corners," selectively reviewing only some files and missing others.
+- **Position drift** — Reported issues frequently don't match the actual code location, with line numbers or file references drifting off target.
+- **Unstable quality** — Natural-language-driven Skills are hard to debug, and review quality fluctuates significantly with minor prompt variations.
+
+The root cause: a purely language-driven architecture lacks hard constraints on the review process.
+
+### Core Design: Deterministic Engineering × Agent Hybrid
+
+Open Code Review's core philosophy is to combine deterministic engineering with an agent, each handling what it does best.
+
+**Deterministic Engineering — Hard Constraints**
+
+For review steps that *must not go wrong*, engineering logic — not the language model — guarantees correctness:
+
+- **Precise file selection** — Determines exactly which files need review and which should be filtered, ensuring no important change is missed.
+- **Smart file bundling** — Groups related files into a single review unit (e.g., `message_en.properties` and `message_zh.properties` are bundled together). Each bundle runs as a sub-agent with isolated context — a divide-and-conquer strategy that stays stable on very large changesets and naturally supports concurrent review.
+- **Fine-grained rule matching** — Matches review rules to each file's characteristics, keeping the model's attention sharply focused and eliminating information noise at the source. Compared to purely language-driven rule guidance, template-engine-based rule matching is more stable and predictable.
+- **External positioning and reflection modules** — Independent comment-positioning and comment-reflection modules systematically improve both the location accuracy and content accuracy of AI feedback.
+
+**Agent — Dynamic Decision-Making**
+
+The agent's strengths are concentrated where they matter most — dynamic decisions and dynamic context retrieval:
+
+- **Scenario-tuned prompts** — Prompt templates deeply optimized for code review, improving effectiveness while reducing token consumption.
+- **Scenario-tuned toolset** — Distilled from deep analysis of tool-call traces in large-scale production data — including call frequency distributions, per-tool repetition rates, and the impact of new tools on the overall call chain — resulting in a purpose-built toolset that is more stable and predictable for code review than a generic agent toolkit.
+
+## How to Use
+
+### CLI
+
+#### Install
+
+**Via NPM (Recommended)**
 
 ```bash
 npm install -g @alibaba-group/open-code-review
@@ -31,7 +69,7 @@ npm install -g @alibaba-group/open-code-review
 
 After installation, the `ocr` command is available globally.
 
-### From GitHub Release
+**From GitHub Release**
 
 Download the latest binary from [GitHub Releases](https://github.com/alibaba/open-code-review/releases):
 
@@ -53,7 +91,7 @@ curl -Lo ocr https://github.com/alibaba/open-code-review/releases/latest/downloa
 chmod +x ocr && sudo mv ocr /usr/local/bin/ocr
 ```
 
-### From Source
+**From Source**
 
 ```bash
 git clone https://github.com/alibaba/open-code-review.git
@@ -62,9 +100,9 @@ make build
 sudo cp dist/opencodereview /usr/local/bin/ocr
 ```
 
-## Quick Start
+#### Quick Start
 
-### 1. Configure LLM
+**1. Configure LLM**
 
 **You must configure an LLM before reviewing code.**
 
@@ -84,15 +122,15 @@ export OCR_USE_ANTHROPIC=true
 
 Config is stored in `~/.opencodereview/config.json`.
 
-The tool also falls back to Claude Code environment variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) and parses `~/.zshrc` / `~/.bashrc` for those exports.
+It is also compatible with Claude Code environment variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) and parses `~/.zshrc` / `~/.bashrc` for those exports.
 
-### 2. Test Connectivity
+**2. Test Connectivity**
 
 ```bash
 ocr llm test
 ```
 
-### 3. Review
+**3. Review**
 
 ```bash
 cd your-project
@@ -106,6 +144,71 @@ ocr review --from main --to feature-branch
 # Single commit
 ocr review --commit abc123
 ```
+
+### Integrate with Coding Agents
+
+OCR can be seamlessly integrated into AI coding agents as a slash command, enabling code review directly within your agent workflow.
+
+#### Option 1: Install as a Skill
+
+Use `npx` to install the OCR skill into your project:
+
+```bash
+npx skills add alibaba/open-code-review --skill open-code-review
+```
+
+This installs the `open-code-review` skill from the [skills registry](skills/open-code-review/SKILL.md), which teaches your coding agent how to invoke `ocr` for code review, classify issues by priority, and optionally apply fixes.
+
+#### Option 2: Install as a Claude Code Plugin
+
+For [Claude Code](https://docs.anthropic.com/en/docs/claude-code), install the command plugin through the following command in Claude Code:
+
+```bash
+/plugin marketplace add alibaba/open-code-review
+/plugin install open-code-review@open-code-review
+```
+
+This registers the `/open-code-review:review` slash command, which runs OCR and automatically filters and fixes issues.
+
+#### Option 3: Copy the Command File Directly
+
+For a quick setup without any package manager, simply copy the command file to use the `/open-code-review` slash command in Claude Code.
+
+**Project-level** (shared with team via git):
+
+```bash
+mkdir -p .claude/commands
+curl -o .claude/commands/open-code-review.md \
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/plugins/open-code-review/commands/review.md
+```
+
+**User-level** (personal global use across all projects):
+
+```bash
+mkdir -p ~/.claude/commands
+curl -o ~/.claude/commands/open-code-review.md \
+  https://raw.githubusercontent.com/alibaba/open-code-review/main/plugins/open-code-review/commands/review.md
+```
+
+> **Prerequisite**: All integration methods require the `ocr` CLI to be installed and an LLM configured. See [Install](#install) and [Configure LLM](#1-configure-llm) above.
+
+### CI/CD Integration
+
+OCR can be integrated into CI/CD pipelines to automate code review on Merge Requests / Pull Requests.
+
+The core command for CI integration:
+
+```bash
+ocr review \
+  --from "origin/main" \
+  --to "origin/feature-branch" \
+  --format json \
+  --audience agent
+```
+
+The `--format json` and `--audience agent` flags output machine-readable results suitable for parsing in CI scripts.
+
+See the [`examples/`](./examples/) directory for integration examples, including GitHub Actions and GitLab CI.
 
 ## Commands
 
@@ -196,20 +299,6 @@ Layers 1–3 share the same JSON format:
 - Within each layer, rules are evaluated in declaration order — the first match wins.
 - If a rule file does not exist, it is silently skipped.
 
-## Architecture
-
-The review agent follows a **three-phase workflow**:
-
-1. **Plan Phase** — For changes exceeding 50 lines, the agent performs risk analysis before reviewing. Smaller diffs skip directly to the main phase.
-2. **Main Task Loop** — Each changed file gets its own goroutine. The LLM interacts with built-in tools (read files, search code, read diffs, submit comments) in a conversation loop until it calls `task_done`.
-3. **Memory Compression** — When prompt context exceeds token thresholds (60% async, 80% sync), the agent uses three-zone partitioning (frozen / compress / active) to manage context window size.
-
-### Key Design Decisions
-
-- **Concurrent per-file processing** — Files are reviewed in parallel (default 8 workers). Timeout prevents any single file from blocking others.
-- **Dual protocol support** — Both Anthropic Messages API and OpenAI Chat Completions API are supported, with automatic URL normalization.
-- **Tool-use agent** — The LLM has access to domain-specific tools (`code_search`, `file_read`, `code_comment`, `file_find`, `file_read_diff`), enabling cross-referential context-aware reviews rather than isolated diff scanning.
-
 ## Configuration Reference
 
 Config file: `~/.opencodereview/config.json`
@@ -237,48 +326,6 @@ Environment variables take precedence over the config file.
 | `OCR_LLM_MODEL` | Model name |
 | `OCR_USE_ANTHROPIC` | `true` = Anthropic, `false` = OpenAI |
 
-### Template Parameters
-
-Internal defaults defined in `internal/config/template/task_template.json`:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `MAX_TOKENS` | 58888 | Max tokens per LLM request |
-| `MAX_TOOL_REQUEST_TIMES` | 20 | Max tool-use iterations per file |
-| `PLAN_MODE_LINE_THRESHOLD` | 50 | Skip plan phase below this line count |
-| `TOOL_REQUEST_WAIT_TIME_MS` | 10000 | Per-tool-request timeout |
-
-## Built-in Tools
-
-Tools the LLM agent can invoke during review:
-
-| Tool | Phases | Purpose |
-|------|--------|---------|
-| `task_done` | main_task | Terminate the review (DONE/FAILED) |
-| `code_comment` | main_task | Submit a line-level review comment |
-| `file_read` | main_task | Read file content at a line range |
-| `code_search` | plan + main | Search text/regex across files |
-| `file_read_diff` | plan + main | View diff content for other changed files |
-| `file_find` | plan + main | Find files by filename keyword |
-
-## System Review Rules
-
-Built-in glob-pattern-matched review checklists per file type, defined in `internal/config/rules/system_rules.json`:
-
-| Pattern | Focus Areas |
-|---------|-------------|
-| `*.java` | NPE risks, dead loops, switch fallthrough, N+1 queries, thread safety |
-| `*.{ts,js,tsx,jsx}` | Quality, React best practices, async norms, XSS/security |
-| `*.kt` | Null safety, coroutine usage, idiomatic patterns |
-| `*{go,py,ets,lua,dart,swift,groovy}` | Logic bugs, typos |
-| `*{cpp,cc,hpp}` | Smart pointers, RAII, STL, const correctness |
-| `*.c` | malloc/free pairing, buffer overflow |
-| `pom.xml` / `build.gradle` | SNAPSHOT version prevention |
-| `package.json` | Latest/wildcard versions, dependency conflicts |
-| `*mapper*.xml` / `*dao*.xml` | SQL injection, performance, logic errors |
-| `*.properties` | Typo detection, duplicate keys, security issues |
-
-Override with `--rule path/to/rules.json`.
 
 ## Telemetry
 
@@ -292,80 +339,9 @@ ocr config set telemetry.otlp_endpoint localhost:4317
 
 Set `telemetry.content_logging` to include LLM prompts and responses in exported data.
 
-## CI/CD Integration
+## Contributing
 
-OCR can be integrated into CI/CD pipelines to automate code review on Merge Requests / Pull Requests.
-
-The core command for CI integration:
-
-```bash
-ocr review \
-  --from "origin/main" \
-  --to "origin/feature-branch" \
-  --format json \
-  --audience agent
-```
-
-The `--format json` and `--audience agent` flags output machine-readable results suitable for parsing in CI scripts.
-
-See the [`examples/`](./examples/) directory for integration examples, including GitHub Actions and GitLab CI.
-
-## Development
-
-```bash
-make build      # Build for current platform
-make test       # Run tests with race detection
-make clean      # Remove dist/
-make build-all  # Cross-compile (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)
-make dist       # Full release pipeline
-```
-
-## Integration into Coding Agents
-
-OCR can be seamlessly integrated into AI coding agents as a slash command, enabling code review directly within your agent workflow.
-
-### Option 1: Install as a Skill
-
-Use `npx` to install the OCR skill into your project:
-
-```bash
-npx skills add alibaba/open-code-review --skill open-code-review
-```
-
-This installs the `open-code-review` skill from the [skills registry](skills/open-code-review/SKILL.md), which teaches your coding agent how to invoke `ocr` for code review, classify issues by priority, and optionally apply fixes.
-
-### Option 2: Install as a Claude Code Plugin
-
-For [Claude Code](https://docs.anthropic.com/en/docs/claude-code), install the command plugin through the following command in Claude Code:
-
-```bash
-/plugin marketplace add alibaba/open-code-review
-/plugin install open-code-review@open-code-review
-```
-
-This registers the `/open-code-review:review` slash command, which runs OCR and automatically filters and fixes issues.
-
-### Option 3: Copy the Command File Directly
-
-For a quick setup without any package manager, simply copy the command file to use the `/open-code-review` slash command in Claude Code.
-
-**Project-level** (shared with team via git):
-
-```bash
-mkdir -p .claude/commands
-curl -o .claude/commands/open-code-review.md \
-  https://raw.githubusercontent.com/alibaba/open-code-review/main/plugins/open-code-review/commands/review.md
-```
-
-**User-level** (personal global use across all projects):
-
-```bash
-mkdir -p ~/.claude/commands
-curl -o ~/.claude/commands/open-code-review.md \
-  https://raw.githubusercontent.com/alibaba/open-code-review/main/plugins/open-code-review/commands/review.md
-```
-
-> **Prerequisite**: All integration methods require the `ocr` CLI to be installed and an LLM configured. See [Install](#install) and [Configure LLM](#1-configure-llm) above.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding guidelines, and how to submit pull requests.
 
 ## License
 
