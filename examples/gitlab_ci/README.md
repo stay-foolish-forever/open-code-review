@@ -107,6 +107,17 @@ script:
   - ocr review --concurrency 5 --from origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME --to origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
 ```
 
+### Provide background context
+
+Use the `--background` flag to pass additional context that helps OCR better understand the purpose of the changes:
+
+```yaml
+script:
+  - ocr review --background "$CI_MERGE_REQUEST_TITLE" --from origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME --to origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+```
+
+This is particularly useful when your MR titles follow semantic conventions (e.g., `feat(auth): add OAuth2 support`) that clearly summarize what the MR implements. The background information helps OCR provide more relevant and context-aware review comments.
+
 ### Self-hosted GitLab
 
 The script automatically uses `CI_SERVER_URL` to determine the GitLab API base URL, so it works with self-hosted GitLab instances out of the box.

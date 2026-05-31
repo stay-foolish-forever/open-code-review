@@ -100,6 +100,17 @@ Adjust the `--concurrency` flag for large PRs to control the number of concurren
   run: ocr review --concurrency 5 --from origin/${{ github.base_ref }} --to origin/${{ github.head_ref }}
 ```
 
+### Provide background context
+
+Use the `--background` flag to pass additional context that helps OCR better understand the purpose of the changes:
+
+```yaml
+- name: Run OCR review
+  run: ocr review --background "${{ github.event.pull_request.title }}" --from origin/${{ github.base_ref }} --to origin/${{ github.head_ref }}
+```
+
+This is particularly useful when your PR titles follow semantic conventions (e.g., `feat(auth): add OAuth2 support`) that clearly summarize what the PR implements. The background information helps OCR provide more relevant and context-aware review comments.
+
 ### Customize the review comment author with GitHub App
 
 By default, review comments are posted using the built-in `GITHUB_TOKEN`, which appears as `github-actions[bot]`. You can customize this by creating a GitHub App and using its credentials instead.
