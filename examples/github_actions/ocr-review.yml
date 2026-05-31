@@ -3,6 +3,10 @@
 # This workflow automatically reviews pull requests using OpenCodeReview
 # and posts review comments directly on the PR.
 #
+# Triggers:
+#   - PR opened, synchronized, or reopened
+#   - Comment on PR containing '/open-code-review' or '@open-code-review'
+#
 # Required secrets:
 #   OCR_LLM_URL        - LLM API endpoint (e.g., https://api.openai.com/v1/chat/completions)
 #   OCR_LLM_AUTH_TOKEN - Authentication token for the LLM API
@@ -17,6 +21,8 @@ name: OpenCodeReview PR Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -25,11 +31,34 @@ permissions:
 jobs:
   code-review:
     runs-on: ubuntu-latest
+    # Run on PR events, or on comments starting with trigger keywords
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/open-code-review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '@open-code-review'))
     steps:
+      - name: Get PR context
+        id: pr-context
+        if: github.event_name != 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // For issue_comment events, get PR info
+            const prNumber = context.issue.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('base_ref', pullRequest.base.ref);
+            core.setOutput('head_ref', pullRequest.head.ref);
+            core.setOutput('head_sha', pullRequest.head.sha);
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Full history needed for merge-base diff
+          ref: ${{ github.event_name != 'pull_request' && steps.pr-context.outputs.head_sha || '' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -50,8 +79,14 @@ jobs:
       - name: Run OpenCodeReview
         id: review
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
-          HEAD_REF="${{ github.event.pull_request.head.ref }}"
+          # Get base and head refs from PR context (different for comment triggers)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
+            HEAD_REF="${{ github.event.pull_request.head.ref }}"
+          else
+            BASE_REF="${{ steps.pr-context.outputs.base_ref }}"
+            HEAD_REF="${{ steps.pr-context.outputs.head_ref }}"
+          fi
 
           echo "Reviewing PR: ${HEAD_REF} against ${BASE_REF}"
 
@@ -114,13 +149,20 @@ jobs:
 
             // Prepare PR review with inline comments
             const prNumber = context.issue.number;
-            const { data: pullRequest } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
-
-            const commitSha = pullRequest.head.sha;
+            let commitSha;
+            
+            // Get commit SHA from event context
+            if (context.eventName === 'pull_request') {
+              commitSha = context.payload.pull_request.head.sha;
+            } else {
+              // For comment events, we need to fetch the PR
+              const { data: pullRequest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              commitSha = pullRequest.head.sha;
+            }
 
             // Build review comments array for the PR review API
             // Only inline comments with line info can be posted via createReview
@@ -160,7 +202,14 @@ jobs:
             }
 
             // Submit as a single PR review with all comments
-            let summaryBody = `🔍 **OpenCodeReview** found **${comments.length}** issue(s) in this PR.`;
+            const totalCount = comments.length;
+            const inlineCount = reviewComments.length;
+            const summaryCount = commentsWithoutLine.length;
+            let summaryBody = `🔍 **OpenCodeReview** found **${totalCount}** issue(s) in this PR.`;
+            if (totalCount > 0) {
+              summaryBody += `\n- ✅ ${inlineCount} posted as inline comment(s)`;
+              summaryBody += `\n- 📝 ${summaryCount} posted as summary (missing line info)`;
+            }
             if (warnings.length > 0) {
               summaryBody += `\n\n⚠️ ${warnings.length} warning(s) occurred during review.`;
             }
@@ -170,6 +219,11 @@ jobs:
               summaryBody += '\n\n---\n\n';
               summaryBody += formatCommentMarkdown(comment);
             }
+
+            // Statistics tracking
+            let successCount = 0;
+            let failedCount = 0;
+            const failedComments = [];
 
             try {
               await github.rest.pulls.createReview({
@@ -181,22 +235,55 @@ jobs:
                 event: 'COMMENT',
                 comments: reviewComments
               });
-              console.log(`Successfully posted review with ${reviewComments.length} inline comments (${commentsWithoutLine.length} in summary)`);
+              successCount = reviewComments.length;
+              console.log(`Successfully posted review with ${successCount} inline comments (${commentsWithoutLine.length} in summary)`);
             } catch (e) {
               console.log('Failed to post review with inline comments:', e.message);
-              // Fallback: post comments as a single issue comment
-              let fallbackBody = summaryBody;
-              for (const comment of comments) {
-                // Skip comments without line info as they're already in summaryBody
-                if (!comment.start_line && !comment.end_line) continue;
-                fallbackBody += '\n\n---\n\n';
-                fallbackBody += formatCommentMarkdown(comment);
+              console.log('Falling back to posting comments individually...');
+              
+              // Fallback: post comments one by one
+              for (const reviewComment of reviewComments) {
+                try {
+                  await github.rest.pulls.createReview({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: prNumber,
+                    commit_id: commitSha,
+                    body: '',
+                    event: 'COMMENT',
+                    comments: [reviewComment]
+                  });
+                  successCount++;
+                  console.log(`Successfully posted comment for ${reviewComment.path}`);
+                } catch (innerE) {
+                  failedCount++;
+                  failedComments.push({ comment: reviewComment, error: innerE.message });
+                  console.log(`Failed to post comment for ${reviewComment.path}: ${innerE.message}`);
+                }
               }
+              
+              // Post summary comment with statistics
+              let finalBody = summaryBody;
+              finalBody += `\n\n---\n\n📊 **Posting Statistics:**`;
+              finalBody += `\n- ✅ Successfully posted: ${successCount} comment(s)`;
+              if (failedCount > 0) {
+                finalBody += `\n- ❌ Failed to post: ${failedCount} comment(s)`;
+              }
+              
+              // Add failed comments details
+              if (failedComments.length > 0) {
+                finalBody += '\n\n<details><summary>❌ Failed Comments Details</summary>\n\n';
+                for (const { comment, error } of failedComments) {
+                  finalBody += `- \`${comment.path}\`: ${error}\n`;
+                }
+                finalBody += '\n</details>';
+              }
+              
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: prNumber,
-                body: fallbackBody
+                body: finalBody
               });
             }
 

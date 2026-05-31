@@ -6,12 +6,15 @@ This demo shows how to integrate OpenCodeReview into your GitHub Actions workflo
 
 ```
 PR Created/Updated → GitHub Actions Triggered → OCR Reviews Diff → Comments Posted on PR
+     OR
+Comment with trigger keyword ↗
 ```
 
 1. When a PR is opened, synchronized, or reopened, the workflow triggers
-2. It installs OCR via `npm install -g @alibaba-group/open-code-review`
-3. Runs `ocr review --from origin/<base> --to origin/<head> --format json` to analyze the diff
-4. Parses the JSON output and posts inline review comments on the PR using GitHub's Pull Request Review API
+2. Alternatively, when a comment containing `/open-code-review` or `@open-code-review` is posted on a PR, the workflow triggers
+3. It installs OCR via `npm install -g @alibaba-group/open-code-review`
+4. Runs `ocr review --from origin/<base> --to origin/<head> --format json` to analyze the diff
+5. Parses the JSON output and posts inline review comments on the PR using GitHub's Pull Request Review API
 
 ## Setup
 
@@ -50,6 +53,27 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 ```
+
+### Customize comment trigger keywords
+
+By default, the workflow triggers when a PR comment starts with `/open-code-review` or `@open-code-review`. You can customize these keywords by modifying the `if` condition in the workflow:
+
+```yaml
+if: |
+  github.event_name == 'pull_request' ||
+  (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')) ||
+  (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '@mybot'))
+```
+
+Or use a more flexible pattern with `contains` to trigger on any comment containing the keyword:
+
+```yaml
+if: |
+  github.event_name == 'pull_request' ||
+  (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/review'))
+```
+
+> **Note:** The condition `github.event.issue.pull_request` ensures the comment is on a PR, not a regular issue.
 
 ### Use a specific OCR version
 
