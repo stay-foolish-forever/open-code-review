@@ -208,7 +208,10 @@ ocr review \
 
 `--format json` 和 `--audience agent` 参数输出适合 CI 脚本解析的机器可读结果。
 
-集成示例请参见 [`examples/`](./examples/) 目录，包括 GitHub Actions 和 GitLab CI。
+集成示例请参见 [`examples/`](./examples/) 目录：
+
+- [`github_actions/`](./examples/github_actions/) — GitHub Actions 集成示例
+- [`gitlab_ci/`](./examples/gitlab_ci/) — GitLab CI 集成示例
 
 ## 命令
 

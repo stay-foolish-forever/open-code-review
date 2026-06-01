@@ -208,7 +208,10 @@ ocr review \
 
 The `--format json` and `--audience agent` flags output machine-readable results suitable for parsing in CI scripts.
 
-See the [`examples/`](./examples/) directory for integration examples, including GitHub Actions and GitLab CI.
+See the [`examples/`](./examples/) directory for integration examples:
+
+- [`github_actions/`](./examples/github_actions/) — GitHub Actions integration example
+- [`gitlab_ci/`](./examples/gitlab_ci/) — GitLab CI integration example
 
 ## Commands
 
