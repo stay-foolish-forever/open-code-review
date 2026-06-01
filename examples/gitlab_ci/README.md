@@ -118,6 +118,82 @@ script:
 
 This is particularly useful when your MR titles follow semantic conventions (e.g., `feat(auth): add OAuth2 support`) that clearly summarize what the MR implements. The background information helps OCR provide more relevant and context-aware review comments.
 
+### Change the trigger events
+
+By default, the pipeline uses `only: [merge_requests]`, which triggers on **all** MR events (creation, updates, reopen). GitLab CI does not natively support fine-grained control to trigger **only on MR creation**.
+
+To avoid re-reviewing on every push to an existing MR (and wasting LLM API tokens), you can check for existing OCR reviews **before** running `ocr review`. Use a wrapper script that skips the review step if OCR comments already exist:
+
+```yaml
+script:
+  # Install OpenCodeReview
+  - npm install -g @alibaba-group/open-code-review
+
+  # Configure OCR
+  - mkdir -p ~/.open-code-review
+  - |
+    ocr config set llm.url $OCR_LLM_URL
+    ocr config set llm.auth_token $OCR_LLM_AUTH_TOKEN
+    ocr config set llm.model $OCR_LLM_MODEL
+    ocr config set llm.use_anthropic false
+    ocr config set llm.extra_body '{"thinking": {"type": "disabled"}}'
+
+  # Check for existing OCR reviews and run review only if not found
+  - |
+    python3 << 'WRAPPER_SCRIPT'
+    import json
+    import os
+    import subprocess
+    import sys
+    import urllib.request
+
+    GITLAB_URL = os.environ.get("CI_SERVER_URL", "https://gitlab.com")
+    PROJECT_ID = os.environ["CI_PROJECT_ID"]
+    MR_IID = os.environ["CI_MERGE_REQUEST_IID"]
+    API_TOKEN = os.environ["GITLAB_API_TOKEN"]
+    SOURCE_BRANCH = os.environ["CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"]
+    TARGET_BRANCH = os.environ["CI_MERGE_REQUEST_TARGET_BRANCH_NAME"]
+
+    # Check for existing OCR reviews
+    url = f"{GITLAB_URL}/api/v4/projects/{PROJECT_ID}/merge_requests/{MR_IID}/notes?per_page=100"
+    req = urllib.request.Request(url, headers={"PRIVATE-TOKEN": API_TOKEN})
+    with urllib.request.urlopen(req) as resp:
+        notes = json.loads(resp.read().decode("utf-8"))
+
+    for note in notes:
+        if "OpenCodeReview" in note.get("body", ""):
+            print("⏭️ OCR has already reviewed this MR. Skipping to save tokens.")
+            print("Delete previous OCR comments to re-trigger review.")
+            sys.exit(0)
+
+    # No existing review found - run OCR
+    print("🔍 No existing OCR review found. Running review...")
+    result = subprocess.run([
+        "ocr", "review",
+        "--from", f"origin/{TARGET_BRANCH}",
+        "--to", f"origin/{SOURCE_BRANCH}",
+        "--format", "json",
+        "--audience", "agent"
+    ], capture_output=True, text=True)
+
+    # Save output for the posting script
+    with open("/tmp/ocr-result.json", "w") as f:
+        f.write(result.stdout)
+    with open("/tmp/ocr-stderr.log", "w") as f:
+        f.write(result.stderr)
+
+    print("OCR review completed.")
+    WRAPPER_SCRIPT
+
+  # Post review comments to MR
+  - |
+    python3 << 'PYTHON_SCRIPT'
+    ...existing post script...
+    PYTHON_SCRIPT
+```
+
+The key logic: the Python wrapper checks for existing OCR comments before running `ocr review`. If found, it exits early with `sys.exit(0)` before consuming any LLM tokens. To re-trigger a review, users can manually delete the previous OCR comments.
+
 ### Self-hosted GitLab
 
 The script automatically uses `CI_SERVER_URL` to determine the GitLab API base URL, so it works with self-hosted GitLab instances out of the box.
