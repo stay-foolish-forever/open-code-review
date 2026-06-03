@@ -600,7 +600,7 @@ func (a *Agent) filterDiffs(diffs []model.Diff) []model.Diff {
 		path := effectivePath(d)
 		if !a.shouldReview(d) {
 			if d.IsBinary {
-				fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s - binary file\n", path)
+				fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — binary file\n", path)
 			} else {
 				fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — filtered by path/extension rules\n", path)
 			}
