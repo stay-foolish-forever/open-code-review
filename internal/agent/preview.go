@@ -16,6 +16,7 @@ const (
 	ExcludeExtension   ExcludeReason = "unsupported_ext"
 	ExcludeDefaultPath ExcludeReason = "default_path"
 	ExcludeDeleted     ExcludeReason = "deleted"
+	ExcludeBinary      ExcludeReason = "binary"
 )
 
 // DiffPreviewEntry is one file's preview record.
@@ -38,9 +39,14 @@ type DiffPreview struct {
 	ExcludedCount   int                `json:"excluded_count"`
 }
 
-// whyExcluded applies the same four-gate algorithm as shouldReview but
+// whyExcluded applies the filter algorithm as shouldReview but
 // returns the specific reason a file is excluded.
-func (a *Agent) whyExcluded(path string) ExcludeReason {
+func (a *Agent) whyExcluded(d model.Diff) ExcludeReason {
+	if d.IsBinary {
+		return ExcludeBinary
+	}
+
+	path := effectivePath(d)
 	f := a.args.FileFilter
 
 	if f != nil && f.IsUserExcluded(path) {
@@ -85,7 +91,7 @@ func (a *Agent) Preview() (*DiffPreview, error) {
 			Status:     diffStatus(d),
 		}
 
-		reason := a.whyExcluded(path)
+		reason := a.whyExcluded(d)
 		if reason == ExcludeNone && d.IsDeleted {
 			reason = ExcludeDeleted
 		}

@@ -574,7 +574,7 @@ func (a *Agent) filterLargeDiffs(diffs []model.Diff) []model.Diff {
 func (a *Agent) countReviewable(diffs []model.Diff) int {
 	count := 0
 	for _, d := range diffs {
-		if !a.shouldReview(effectivePath(d)) {
+		if !a.shouldReview(d) {
 			continue
 		}
 		if d.IsDeleted {
@@ -585,9 +585,9 @@ func (a *Agent) countReviewable(diffs []model.Diff) int {
 	return count
 }
 
-// shouldReview applies the four-gate filter algorithm via whyExcluded.
-func (a *Agent) shouldReview(path string) bool {
-	return a.whyExcluded(path) == ExcludeNone
+// shouldReview applies the filter algorithm via whyExcluded.
+func (a *Agent) shouldReview(d model.Diff) bool {
+	return a.whyExcluded(d) == ExcludeNone
 }
 
 // filterDiffs drops diffs that should not be reviewed based on user-configured
@@ -598,8 +598,12 @@ func (a *Agent) filterDiffs(diffs []model.Diff) []model.Diff {
 
 	for _, d := range diffs {
 		path := effectivePath(d)
-		if !a.shouldReview(path) {
-			fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — filtered by path/extension rules\n", path)
+		if !a.shouldReview(d) {
+			if d.IsBinary {
+				fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s - binary file\n", path)
+			} else {
+				fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — filtered by path/extension rules\n", path)
+			}
 			skipped++
 			continue
 		}
