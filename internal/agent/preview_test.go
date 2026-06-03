@@ -216,26 +216,74 @@ func TestWhyExcluded_UserIncludePattern(t *testing.T) {
 		diff     model.Diff
 		expected ExcludeReason
 	}{
+		// --- Files matching include patterns bypass default-path checks ---
 		{
-			name: "file matching include pattern",
+			name: "file matching first include pattern is reviewed",
 			diff: model.Diff{
 				NewPath: "src/foo/bar.go",
 			},
 			expected: ExcludeNone,
 		},
 		{
-			name: "file not matching include pattern but valid extension",
+			name: "file matching second include pattern is reviewed",
+			diff: model.Diff{
+				NewPath: "pkg/util/helper.go",
+			},
+			expected: ExcludeNone,
+		},
+		{
+			name: "include pattern bypasses default-path exclusion for test files",
+			diff: model.Diff{
+				NewPath: "src/foo/bar_test.go",
+			},
+			// IMPORTANT: Even though *_test.go is excluded by IsExcludedPath,
+			// matching an include pattern returns ExcludeNone before that check.
+			expected: ExcludeNone,
+		},
+		// --- Include is additive, NOT exclusive ---
+		// When include patterns are configured, files that do NOT match them
+		// still fall through to the default checks. If extension is valid and
+		// path is not default-excluded, they are still reviewed.
+		{
+			name: "non-included file with valid extension still reviewed (additive semantics)",
 			diff: model.Diff{
 				NewPath: "vendor/baz.go",
 			},
-			expected: ExcludeNone, // falls through default checks but .go is supported
+			// .go is a supported extension and vendor/baz.go does not hit
+			// IsExcludedPath, so it falls through to ExcludeNone.
+			expected: ExcludeNone,
 		},
 		{
-			name: "file not matching include pattern and unsupported extension",
+			name: "non-included file in non-excluded directory still reviewed",
+			diff: model.Diff{
+				NewPath: "internal/handler.go",
+			},
+			expected: ExcludeNone,
+		},
+		// --- Extension filter still takes precedence over include logic ---
+		{
+			name: "unsupported extension excluded before include check",
 			diff: model.Diff{
 				NewPath: "docs/readme.md",
 			},
-			expected: ExcludeExtension, // unsupported extension
+			expected: ExcludeExtension,
+		},
+		{
+			name: "unsupported extension even if path looks like include dir",
+			diff: model.Diff{
+				NewPath: "src/notes.txt",
+			},
+			expected: ExcludeExtension,
+		},
+		// --- Default-path exclusion still applies to non-included files ---
+		{
+			name: "non-included test file excluded by default path",
+			diff: model.Diff{
+				NewPath: "internal/handler_test.go",
+			},
+			// Does not match include patterns, falls through.
+			// IsExcludedPath matches *_test.go → ExcludeDefaultPath.
+			expected: ExcludeDefaultPath,
 		},
 	}
 
@@ -243,7 +291,96 @@ func TestWhyExcluded_UserIncludePattern(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := agent.whyExcluded(tt.diff)
 			if got != tt.expected {
-				t.Errorf("whyExcluded() = %v, want %v", got, tt.expected)
+				t.Errorf("whyExcluded() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestWhyExcluded_IncludeBypassesDefaultPath verifies that a file matching
+// an include pattern is reviewed even when it would normally be excluded by
+// the default-path filter (e.g. test files, generated code patterns).
+func TestWhyExcluded_IncludeBypassesDefaultPath(t *testing.T) {
+	agent := New(Args{
+		FileFilter: &rules.FileFilter{
+			Include: []string{"**/*_test.go"},
+		},
+	})
+
+	tests := []struct {
+		name     string
+		diff     model.Diff
+		expected ExcludeReason
+	}{
+		{
+			name: "test file explicitly included overrides default-path exclusion",
+			diff: model.Diff{
+				NewPath: "foo_test.go",
+			},
+			expected: ExcludeNone,
+		},
+		{
+			name: "non-test file still reviewed via default checks",
+			diff: model.Diff{
+				NewPath: "main.go",
+			},
+			expected: ExcludeNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agent.whyExcluded(tt.diff)
+			if got != tt.expected {
+				t.Errorf("whyExcluded() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestWhyExcluded_IncludeAndExcludeInteraction verifies priority: user
+// exclude patterns take precedence over include patterns.
+func TestWhyExcluded_IncludeAndExcludeInteraction(t *testing.T) {
+	agent := New(Args{
+		FileFilter: &rules.FileFilter{
+			Include: []string{"src/**/*.go"},
+			Exclude: []string{"src/generated/**"},
+		},
+	})
+
+	tests := []struct {
+		name     string
+		diff     model.Diff
+		expected ExcludeReason
+	}{
+		{
+			name: "included file is reviewed",
+			diff: model.Diff{
+				NewPath: "src/handler.go",
+			},
+			expected: ExcludeNone,
+		},
+		{
+			name: "file matching both include and exclude is excluded (exclude wins)",
+			diff: model.Diff{
+				NewPath: "src/generated/api.go",
+			},
+			expected: ExcludeUserRule,
+		},
+		{
+			name: "file outside include with valid ext still reviewed (additive)",
+			diff: model.Diff{
+				NewPath: "lib/utils.go",
+			},
+			expected: ExcludeNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agent.whyExcluded(tt.diff)
+			if got != tt.expected {
+				t.Errorf("whyExcluded() = %q, want %q", got, tt.expected)
 			}
 		})
 	}
