@@ -329,6 +329,7 @@ Config file: `~/.opencodereview/config.json`
 | `llm.auth_token` | string | `sk-xxxxxxx` |
 | `llm.model` | string | `claude-opus-4-6` |
 | `llm.use_anthropic` | boolean | `true` \| `false` |
+| `llm.use_max_completion_tokens` | boolean | `true` = use `max_completion_tokens`, `false` = use `max_tokens` (default) |
 | `language` | string | `English` \| `Chinese` (default: Chinese) |
 | `telemetry.enabled` | boolean | `true` \| `false` |
 | `telemetry.exporter` | string | `console` \| `otlp` |
@@ -345,6 +346,7 @@ Environment variables take precedence over the config file.
 | `OCR_LLM_TOKEN` | API key / auth token |
 | `OCR_LLM_MODEL` | Model name |
 | `OCR_USE_ANTHROPIC` | `true` = Anthropic, `false` = OpenAI |
+| `OCR_USE_MAX_COMPLETION_TOKENS` | `true` = use `max_completion_tokens` param instead of `max_tokens` |
 
 
 ## Telemetry

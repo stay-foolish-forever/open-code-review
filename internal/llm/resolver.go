@@ -11,20 +11,22 @@ import (
 
 // ResolvedEndpoint holds the resolved LLM endpoint configuration.
 type ResolvedEndpoint struct {
-	URL       string
-	Token     string
-	Model     string
-	Protocol  string         // "anthropic" or "openai"
-	Source    string         // human-readable config source label
-	ExtraBody map[string]any // vendor-specific request body fields
+	URL                    string
+	Token                  string
+	Model                  string
+	Protocol               string         // "anthropic" or "openai"
+	Source                 string         // human-readable config source label
+	ExtraBody              map[string]any // vendor-specific request body fields
+	UseMaxCompletionTokens bool           // use max_completion_tokens instead of max_tokens
 }
 
 // Environment variable names for OCR-specific configuration.
 const (
-	envOCRLLMURL       = "OCR_LLM_URL"
-	envOCRLLMToken     = "OCR_LLM_TOKEN"
-	envOCRLLMModel     = "OCR_LLM_MODEL"
-	envOCRUseAnthropic = "OCR_USE_ANTHROPIC"
+	envOCRLLMURL                 = "OCR_LLM_URL"
+	envOCRLLMToken               = "OCR_LLM_TOKEN"
+	envOCRLLMModel               = "OCR_LLM_MODEL"
+	envOCRUseAnthropic           = "OCR_USE_ANTHROPIC"
+	envOCRUseMaxCompletionTokens = "OCR_USE_MAX_COMPLETION_TOKENS"
 )
 
 // Environment variable names from Claude Code configuration.
@@ -83,16 +85,23 @@ func tryOCREnv() (ResolvedEndpoint, bool, error) {
 		protocol = "openai"
 	}
 
-	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: protocol, Source: "OCR environment"}, true, nil
+	useMaxCompletionTokens := false
+	if v := os.Getenv(envOCRUseMaxCompletionTokens); v != "" {
+		lower := strings.ToLower(v)
+		useMaxCompletionTokens = lower == "true" || lower == "1" || lower == "yes"
+	}
+
+	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: protocol, Source: "OCR environment", UseMaxCompletionTokens: useMaxCompletionTokens}, true, nil
 }
 
 // llmFileConfig represents the llm section in config.json.
 type llmFileConfig struct {
-	URL          string         `json:"url,omitempty"`
-	AuthToken    string         `json:"auth_token,omitempty"`
-	Model        string         `json:"model,omitempty"`
-	UseAnthropic *bool          `json:"use_anthropic,omitempty"` // pointer to distinguish unset from false
-	ExtraBody    map[string]any `json:"extra_body,omitempty"`
+	URL                    string         `json:"url,omitempty"`
+	AuthToken              string         `json:"auth_token,omitempty"`
+	Model                  string         `json:"model,omitempty"`
+	UseAnthropic           *bool          `json:"use_anthropic,omitempty"`             // pointer to distinguish unset from false
+	UseMaxCompletionTokens *bool          `json:"use_max_completion_tokens,omitempty"` // pointer to distinguish unset from false
+	ExtraBody              map[string]any `json:"extra_body,omitempty"`
 }
 
 type configFile struct {
@@ -128,7 +137,12 @@ func tryOCRConfig(path string) (ResolvedEndpoint, bool, error) {
 		protocol = "openai"
 	}
 
-	return ResolvedEndpoint{URL: cfg.Llm.URL, Token: cfg.Llm.AuthToken, Model: cfg.Llm.Model, Protocol: protocol, Source: "OCR config file", ExtraBody: cfg.Llm.ExtraBody}, true, nil
+	useMaxCompletionTokens := false
+	if cfg.Llm.UseMaxCompletionTokens != nil {
+		useMaxCompletionTokens = *cfg.Llm.UseMaxCompletionTokens
+	}
+
+	return ResolvedEndpoint{URL: cfg.Llm.URL, Token: cfg.Llm.AuthToken, Model: cfg.Llm.Model, Protocol: protocol, Source: "OCR config file", ExtraBody: cfg.Llm.ExtraBody, UseMaxCompletionTokens: useMaxCompletionTokens}, true, nil
 }
 
 // tryCCEnv reads Claude Code environment variables.

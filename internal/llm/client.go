@@ -1,20 +1,21 @@
 // Package llm provides LLM client interfaces supporting multiple protocols.
 // Supported protocols: Anthropic Messages API, OpenAI Chat Completions API.
+// Implementations use the official SDKs: github.com/openai/openai-go and github.com/anthropics/anthropic-sdk-go.
 package llm
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/openai/openai-go/v3"
+	openaioption "github.com/openai/openai-go/v3/option"
 	tiktoken "github.com/pkoukk/tiktoken-go"
 
 	"github.com/open-code-review/open-code-review/internal/stdout"
@@ -36,7 +37,7 @@ func userAgent(provider string) string {
 type LLMClient interface {
 	Completions(req ChatRequest) (*ChatResponse, error)
 	CompletionsWithCtx(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-	StreamCompletion(req ChatRequest, cb func(chunk []byte) error) error
+	StreamCompletion(ctx context.Context, req ChatRequest, cb func(chunk []byte) error) error
 }
 
 // --- Shared data types ---
@@ -186,11 +187,12 @@ type FunctionDef struct {
 
 // ClientConfig holds configuration for connecting to an LLM service.
 type ClientConfig struct {
-	URL       string         // Full API endpoint URL
-	APIKey    string         // Bearer token / API key
-	Model     string         // Default model override
-	Timeout   time.Duration  // Request timeout
-	ExtraBody map[string]any // Vendor-specific fields merged into every request body
+	URL                    string         // Full API endpoint URL
+	APIKey                 string         // Bearer token / API key
+	Model                  string         // Default model override
+	Timeout                time.Duration  // Request timeout
+	ExtraBody              map[string]any // Vendor-specific fields merged into every request body
+	UseMaxCompletionTokens bool           // use max_completion_tokens instead of max_tokens
 }
 
 // --- Factory ---
@@ -199,10 +201,11 @@ type ClientConfig struct {
 // protocol: "anthropic" -> AnthropicClient, anything else -> OpenAIClient.
 func NewLLMClient(ep ResolvedEndpoint) LLMClient {
 	cfg := ClientConfig{
-		URL:       ep.URL,
-		APIKey:    ep.Token,
-		Model:     ep.Model,
-		ExtraBody: ep.ExtraBody,
+		URL:                    ep.URL,
+		APIKey:                 ep.Token,
+		Model:                  ep.Model,
+		ExtraBody:              ep.ExtraBody,
+		UseMaxCompletionTokens: ep.UseMaxCompletionTokens,
 	}
 	if ep.Protocol == "anthropic" {
 		return NewAnthropicClient(cfg)
@@ -276,36 +279,6 @@ func encodingForModel(modelName string) string {
 	}
 }
 
-// --- OpenAIClient ---
-
-// OpenAIClient sends requests to an OpenAI-compatible chat completion API.
-type OpenAIClient struct {
-	cfg    ClientConfig
-	client *http.Client
-}
-
-// NewOpenAIClient creates a new OpenAI-compatible LLM client.
-func NewOpenAIClient(cfg ClientConfig) *OpenAIClient {
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = 5 * time.Minute
-	}
-	baseURL := strings.TrimRight(cfg.URL, "/")
-	if !strings.HasSuffix(baseURL, "/chat/completions") {
-		cfg.URL = baseURL + "/chat/completions"
-	}
-	return &OpenAIClient{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: cfg.Timeout,
-		},
-	}
-}
-
-// NewClient is kept as an alias for backward compatibility during transition.
-func NewClient(cfg ClientConfig) *OpenAIClient {
-	return NewOpenAIClient(cfg)
-}
-
 // ChatRequest represents the payload for a chat completion call.
 type ChatRequest struct {
 	Model       string    `json:"model"`
@@ -314,6 +287,40 @@ type ChatRequest struct {
 	Stream      bool      `json:"stream,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+}
+
+// --- OpenAIClient ---
+
+// OpenAIClient sends requests to an OpenAI-compatible chat completion API via the official SDK.
+type OpenAIClient struct {
+	cfg    ClientConfig
+	client openai.Client
+}
+
+// NewOpenAIClient creates a new OpenAI-compatible LLM client using the official SDK.
+func NewOpenAIClient(cfg ClientConfig) *OpenAIClient {
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 5 * time.Minute
+	}
+
+	// Normalize URL: strip /chat/completions suffix since SDK appends it automatically.
+	baseURL := normalizeOpenAIBaseURL(cfg.URL)
+
+	opts := []openaioption.RequestOption{
+		openaioption.WithAPIKey(cfg.APIKey),
+		openaioption.WithBaseURL(baseURL),
+		openaioption.WithHeader("User-Agent", userAgent("")),
+		openaioption.WithMaxRetries(maxRetries),
+		openaioption.WithRequestTimeout(cfg.Timeout),
+	}
+
+	client := openai.NewClient(opts...)
+	return &OpenAIClient{cfg: cfg, client: client}
+}
+
+// NewClient is kept as an alias for backward compatibility during transition.
+func NewClient(cfg ClientConfig) *OpenAIClient {
+	return NewOpenAIClient(cfg)
 }
 
 // Completions sends a chat completion request and returns the parsed response.
@@ -328,16 +335,19 @@ func (c *OpenAIClient) CompletionsWithCtx(ctx context.Context, req ChatRequest) 
 		model = c.cfg.Model
 	}
 
-	var result *ChatResponse
-	err := c.withRetryCtx(ctx, func() error {
-		resp, err := c.doRequestCtx(ctx, model, req)
-		if err != nil {
-			return err
-		}
-		result = resp
-		return nil
-	})
-	return result, err
+	params := c.buildParams(model, req)
+	reqOpts := c.buildExtraBodyOptions()
+
+	// Capture raw HTTP response for headers
+	var httpResp *http.Response
+	reqOpts = append(reqOpts, openaioption.WithResponseInto(&httpResp))
+
+	completion, err := c.client.Chat.Completions.New(ctx, params, reqOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("API error: %w", err)
+	}
+
+	return c.convertResponse(completion, httpResp), nil
 }
 
 // GeneralRequest sends a simple chat request without or with optional tool calls.
@@ -355,150 +365,229 @@ func (c *OpenAIClient) GeneralRequestWithCtx(ctx context.Context, messages []Mes
 }
 
 // StreamCompletion initiates a streaming chat completion. The callback is invoked per chunk.
-func (c *OpenAIClient) StreamCompletion(req ChatRequest, cb func(chunk []byte) error) error {
-	req.Stream = true
-
+func (c *OpenAIClient) StreamCompletion(ctx context.Context, req ChatRequest, cb func(chunk []byte) error) error {
 	model := req.Model
 	if model == "" {
 		model = c.cfg.Model
 	}
 
-	return c.withRetry(func() error {
-		body := make(map[string]any)
-		b, _ := json.Marshal(req)
-		json.Unmarshal(b, &body)
-		body["model"] = model
-		for k, v := range c.cfg.ExtraBody {
-			body[k] = v
-		}
+	params := c.buildParams(model, req)
+	// Enable usage reporting in stream so the final chunk contains token stats.
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: openai.Bool(true),
+	}
+	reqOpts := c.buildExtraBodyOptions()
 
-		payload, _ := json.Marshal(body)
-		httpReq, err := http.NewRequest(http.MethodPost, c.cfg.URL, bytes.NewReader(payload))
-		if err != nil {
-			return fmt.Errorf("create request: %w", err)
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-		httpReq.Header.Set("Accept", "text/event-stream")
-		httpReq.Header.Set("User-Agent", userAgent(""))
+	stream := c.client.Chat.Completions.NewStreaming(ctx, params, reqOpts...)
+	defer stream.Close()
 
-		resp, err := c.client.Do(httpReq)
-		if err != nil {
-			return fmt.Errorf("request failed: %w", err)
+	for stream.Next() {
+		chunk := stream.Current()
+		// Use RawJSON to preserve the original API response format for downstream consumers.
+		raw := chunk.RawJSON()
+		if raw == "" {
+			continue
 		}
-		defer resp.Body.Close()
-
-		if isRetryableStatus(resp.StatusCode) {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
+		if err := cb([]byte(raw)); err != nil {
+			return err
 		}
-		if resp.StatusCode >= 400 {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("API error %d: %s (non-retryable)", resp.StatusCode, string(bodyBytes))
-		}
-
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
-				break
-			}
-			if err := cb([]byte(data)); err != nil {
-				return err
-			}
-		}
-		return scanner.Err()
-	})
+	}
+	return stream.Err()
 }
 
-// doRequest builds and sends a non-streaming completion request, returning the parsed response.
-func (c *OpenAIClient) doRequest(model string, req ChatRequest) (*ChatResponse, error) {
-	return c.doRequestCtx(context.Background(), model, req)
+// buildParams converts internal ChatRequest to OpenAI SDK params.
+func (c *OpenAIClient) buildParams(model string, req ChatRequest) openai.ChatCompletionNewParams {
+	params := openai.ChatCompletionNewParams{
+		Model:    model,
+		Messages: convertMessagesToOpenAI(req.Messages),
+	}
+
+	if len(req.Tools) > 0 {
+		params.Tools = convertToolsToOpenAI(req.Tools)
+	}
+
+	if req.MaxTokens > 0 {
+		if c.cfg.UseMaxCompletionTokens {
+			params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
+		} else {
+			params.MaxTokens = openai.Int(int64(req.MaxTokens))
+		}
+	}
+
+	if req.Temperature != nil {
+		params.Temperature = openai.Float(*req.Temperature)
+	}
+
+	return params
 }
 
-// doRequestCtx builds and sends a non-streaming completion request with context support.
-func (c *OpenAIClient) doRequestCtx(ctx context.Context, model string, req ChatRequest) (*ChatResponse, error) {
-	if model == "" {
-		model = c.cfg.Model
+// buildExtraBodyOptions creates request options for ExtraBody fields.
+func (c *OpenAIClient) buildExtraBodyOptions() []openaioption.RequestOption {
+	if len(c.cfg.ExtraBody) == 0 {
+		return nil
 	}
-	req.Model = model
-	payload, err := mergeExtraBody(req, c.cfg.ExtraBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request body: %w", err)
+	opts := make([]openaioption.RequestOption, 0, len(c.cfg.ExtraBody))
+	for k, v := range c.cfg.ExtraBody {
+		opts = append(opts, openaioption.WithJSONSet(k, v))
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL, bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	httpReq.Header.Set("User-Agent", userAgent(""))
+	return opts
+}
 
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+// convertResponse maps the SDK ChatCompletion to our internal ChatResponse.
+func (c *OpenAIClient) convertResponse(comp *openai.ChatCompletion, httpResp *http.Response) *ChatResponse {
+	if comp == nil {
+		return &ChatResponse{}
 	}
-	defer resp.Body.Close()
+	choices := make([]Choice, 0, len(comp.Choices))
+	for _, ch := range comp.Choices {
+		var content *string
+		if ch.Message.Content != "" {
+			s := ch.Message.Content
+			content = &s
+		}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
+		toolCalls := make([]ToolCall, 0, len(ch.Message.ToolCalls))
+		for _, tc := range ch.Message.ToolCalls {
+			toolCalls = append(toolCalls, ToolCall{
+				ID:   tc.ID,
+				Type: "function",
+				Function: FunctionCall{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+
+		choices = append(choices, Choice{
+			Message: ResponseMessage{
+				Role:      string(ch.Message.Role),
+				Content:   content,
+				ToolCalls: toolCalls,
+			},
+			FinishReason: string(ch.FinishReason),
+		})
 	}
 
-	if resp.StatusCode >= 400 {
-		detail := extractErrorMessage(bodyBytes)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, detail)
+	var usage *UsageInfo
+	if comp.Usage.TotalTokens > 0 || comp.Usage.PromptTokens > 0 || comp.Usage.CompletionTokens > 0 {
+		cachedTokens := comp.Usage.PromptTokensDetails.CachedTokens
+		usage = &UsageInfo{
+			TotalTokens:      comp.Usage.TotalTokens,
+			PromptTokens:     comp.Usage.PromptTokens - cachedTokens,
+			CompletionTokens: comp.Usage.CompletionTokens,
+			CacheReadTokens:  cachedTokens,
+		}
+		if usage.TotalTokens == 0 {
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens + usage.CacheReadTokens
+		}
 	}
 
-	var apiResp struct {
-		ID      string   `json:"id"`
-		Model   string   `json:"model"`
-		Choices []Choice `json:"choices"`
-	}
-	if err := json.Unmarshal(bodyBytes, &apiResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+	var headers http.Header
+	if httpResp != nil {
+		headers = httpResp.Header
 	}
 
 	return &ChatResponse{
-		ID:      apiResp.ID,
-		Model:   apiResp.Model,
-		Choices: apiResp.Choices,
-		Headers: resp.Header,
-		Usage:   resolveUsage(bodyBytes),
-	}, nil
+		ID:      comp.ID,
+		Model:   comp.Model,
+		Choices: choices,
+		Headers: headers,
+		Usage:   usage,
+	}
+}
+
+// convertMessagesToOpenAI maps internal Message slice to OpenAI SDK message params.
+func convertMessagesToOpenAI(messages []Message) []openai.ChatCompletionMessageParamUnion {
+	result := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	for _, msg := range messages {
+		switch msg.Role {
+		case "system":
+			result = append(result, openai.SystemMessage(msg.ExtractText()))
+		case "user":
+			result = append(result, openai.UserMessage(msg.ExtractText()))
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(msg.ToolCalls))
+				for _, tc := range msg.ToolCalls {
+					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+						OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+							ID: tc.ID,
+							Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+								Name:      tc.Function.Name,
+								Arguments: tc.Function.Arguments,
+							},
+						},
+					})
+				}
+				text := msg.ExtractText()
+				param := openai.ChatCompletionAssistantMessageParam{
+					ToolCalls: toolCalls,
+				}
+				if text != "" {
+					param.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+						OfString: openai.String(text),
+					}
+				}
+				result = append(result, openai.ChatCompletionMessageParamUnion{
+					OfAssistant: &param,
+				})
+			} else {
+				result = append(result, openai.AssistantMessage(msg.ExtractText()))
+			}
+		case "tool":
+			result = append(result, openai.ToolMessage(msg.ExtractText(), msg.ToolCallID))
+		}
+	}
+	return result
+}
+
+// convertToolsToOpenAI maps internal ToolDef slice to OpenAI SDK tool params.
+func convertToolsToOpenAI(tools []ToolDef) []openai.ChatCompletionToolUnionParam {
+	result := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		result = append(result, openai.ChatCompletionFunctionTool(openai.FunctionDefinitionParam{
+			Name:        t.Function.Name,
+			Description: openai.String(t.Function.Description),
+			Parameters:  openai.FunctionParameters(t.Function.Parameters),
+		}))
+	}
+	return result
+}
+
+// normalizeOpenAIBaseURL strips the /chat/completions suffix since the SDK appends it.
+func normalizeOpenAIBaseURL(rawURL string) string {
+	u := strings.TrimRight(rawURL, "/")
+	u = strings.TrimSuffix(u, "/chat/completions")
+	return u
 }
 
 // --- AnthropicClient ---
 
-const anthropicVersion = "2023-06-01"
-
-// AnthropicClient implements the Anthropic Messages API.
+// AnthropicClient implements the Anthropic Messages API via the official SDK.
 type AnthropicClient struct {
 	cfg    ClientConfig
-	client *http.Client
+	client anthropic.Client
 }
 
-// NewAnthropicClient creates a new Anthropic Messages API client.
+// NewAnthropicClient creates a new Anthropic Messages API client using the official SDK.
 func NewAnthropicClient(cfg ClientConfig) *AnthropicClient {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Minute
 	}
-	if !strings.HasSuffix(cfg.URL, "/v1/messages") && !strings.HasSuffix(cfg.URL, "/v1/messages/") {
-		baseURL := strings.TrimRight(cfg.URL, "/")
-		if !strings.HasSuffix(baseURL, "/v1/messages") {
-			cfg.URL = baseURL + "/v1/messages"
-		}
+
+	// Normalize URL: strip /v1/messages suffix since SDK appends it automatically.
+	baseURL := normalizeAnthropicBaseURL(cfg.URL)
+
+	opts := []anthropicoption.RequestOption{
+		anthropicoption.WithAPIKey(cfg.APIKey),
+		anthropicoption.WithBaseURL(baseURL),
+		anthropicoption.WithHeader("User-Agent", userAgent("claude")),
+		anthropicoption.WithMaxRetries(maxRetries),
+		anthropicoption.WithRequestTimeout(cfg.Timeout),
 	}
-	return &AnthropicClient{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: cfg.Timeout,
-		},
-	}
+
+	client := anthropic.NewClient(opts...)
+	return &AnthropicClient{cfg: cfg, client: client}
 }
 
 // Completions sends a chat completion request and returns the parsed response.
@@ -513,343 +602,108 @@ func (c *AnthropicClient) CompletionsWithCtx(ctx context.Context, req ChatReques
 		model = c.cfg.Model
 	}
 
-	var result *ChatResponse
-	err := c.withRetryCtx(ctx, func() error {
-		resp, err := c.doRequestCtx(ctx, model, req)
-		if err != nil {
-			return err
-		}
-		result = resp
-		return nil
-	})
-	return result, err
+	params := c.buildParams(model, req)
+	reqOpts := c.buildExtraBodyOptions()
+
+	// Capture raw HTTP response for headers
+	var httpResp *http.Response
+	reqOpts = append(reqOpts, anthropicoption.WithResponseInto(&httpResp))
+
+	message, err := c.client.Messages.New(ctx, params, reqOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("API error: %w", err)
+	}
+
+	return c.convertResponse(message, httpResp), nil
 }
 
-// StreamCompletion initiates a streaming chat completion using SSE. The callback
-// is invoked per chunk with raw JSON data stripped of the "data: " prefix.
-func (c *AnthropicClient) StreamCompletion(req ChatRequest, cb func(chunk []byte) error) error {
-	req.Stream = true
-
+// StreamCompletion initiates a streaming chat completion using SSE.
+func (c *AnthropicClient) StreamCompletion(ctx context.Context, req ChatRequest, cb func(chunk []byte) error) error {
 	model := req.Model
 	if model == "" {
 		model = c.cfg.Model
 	}
 
-	return c.withRetry(func() error {
-		body := c.buildRequestBody(model, req)
-		body.Stream = true
+	params := c.buildParams(model, req)
+	reqOpts := c.buildExtraBodyOptions()
 
-		payload, err := mergeExtraBody(body, c.cfg.ExtraBody)
-		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
+	stream := c.client.Messages.NewStreaming(ctx, params, reqOpts...)
+	defer stream.Close()
+
+	for stream.Next() {
+		event := stream.Current()
+		// Use RawJSON to preserve the original API response format for downstream consumers.
+		raw := event.RawJSON()
+		if raw == "" {
+			continue
 		}
-
-		httpReq, err := http.NewRequest(http.MethodPost, c.cfg.URL, bytes.NewReader(payload))
-		if err != nil {
-			return fmt.Errorf("create request: %w", err)
+		if err := cb([]byte(raw)); err != nil {
+			return err
 		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("x-api-key", c.cfg.APIKey)
-		httpReq.Header.Set("anthropic-version", anthropicVersion)
-		httpReq.Header.Set("User-Agent", userAgent("claude"))
-
-		resp, err := c.client.Do(httpReq)
-		if err != nil {
-			return fmt.Errorf("request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if isRetryableStatus(resp.StatusCode) {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
-		}
-		if resp.StatusCode >= 400 {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("API error %d: %s (non-retryable)", resp.StatusCode, string(bodyBytes))
-		}
-
-		scanner := bufio.NewScanner(resp.Body)
-		var eventType string
-
-		for scanner.Scan() {
-			line := scanner.Text()
-
-			// Capture event type line: "event: message_delta"
-			if strings.HasPrefix(line, "event: ") {
-				eventType = strings.TrimPrefix(line, "event: ")
-				continue
-			}
-
-			// Skip empty lines and non-data lines
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "" {
-				continue
-			}
-
-			// message_stop signals end of stream
-			if eventType == "message_stop" {
-				break
-			}
-
-			if err := cb([]byte(data)); err != nil {
-				return err
-			}
-		}
-		return scanner.Err()
-	})
+	}
+	return stream.Err()
 }
 
-// anthropicRequest is the request body for Anthropic Messages API.
-type anthropicRequest struct {
-	Model       string          `json:"model"`
-	MaxTokens   int             `json:"max_tokens"`
-	System      string          `json:"system,omitempty"`
-	Messages    []anthroMessage `json:"messages"`
-	Tools       []anthroTool    `json:"tools,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-}
+// buildParams converts internal ChatRequest to Anthropic SDK params.
+func (c *AnthropicClient) buildParams(model string, req ChatRequest) anthropic.MessageNewParams {
+	system, messages := convertMessagesToAnthropic(req.Messages)
 
-type anthroMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"` // string or []interface{}
-}
-
-// anthropicToolUseBlock represents a tool_use content block in Anthropic's Messages API.
-type anthropicToolUseBlock struct {
-	Type  string         `json:"type"`  // "tool_use"
-	ID    string         `json:"id"`    // tool use ID
-	Name  string         `json:"name"`  // function name
-	Input map[string]any `json:"input"` // function arguments (parsed as object)
-}
-
-type anthroTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
-}
-
-// doRequestCtx builds and sends an Anthropic Messages API request.
-func (c *AnthropicClient) doRequestCtx(ctx context.Context, model string, req ChatRequest) (*ChatResponse, error) {
-	if model == "" {
-		model = c.cfg.Model
-	}
-
-	body := c.buildRequestBody(model, req)
-	payload, err := mergeExtraBody(body, c.cfg.ExtraBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request body: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL, bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.cfg.APIKey)
-	httpReq.Header.Set("anthropic-version", anthropicVersion)
-	httpReq.Header.Set("User-Agent", userAgent("claude"))
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		detail := extractErrorMessage(bodyBytes)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, detail)
-	}
-
-	chatResp, err := c.parseResponse(bodyBytes, resp.Header)
-	if err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-	return chatResp, nil
-}
-
-// buildRequestBody converts the shared ChatRequest into Anthropic format.
-func (c *AnthropicClient) buildRequestBody(model string, req ChatRequest) anthropicRequest {
-	messages := make([]anthroMessage, 0, len(req.Messages))
-	var systemMsg string
-
-	var pendingToolResults []Message // collect consecutive tool messages
-
-	flushToolResults := func() {
-		if len(pendingToolResults) == 0 {
-			return
-		}
-		// Merge all pending tool results into a single user message
-		var blocks []interface{}
-		for _, tr := range pendingToolResults {
-			blocks = append(blocks, ContentBlock{
-				Type:      "tool_result",
-				ToolUseID: tr.ToolCallID,
-				Content: []ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf("%v", tr.Content),
-				}},
-			})
-		}
-		messages = append(messages, anthroMessage{Role: "user", Content: blocks})
-		pendingToolResults = nil
-	}
-
-	for _, msg := range req.Messages {
-		switch msg.Role {
-		case "system":
-			if s, ok := msg.Content.(string); ok {
-				systemMsg = s
-			}
-			flushToolResults()
-		case "tool":
-			pendingToolResults = append(pendingToolResults, msg)
-		case "assistant":
-			flushToolResults()
-			// Build Anthropic content blocks from text + tool calls
-			var blocks []interface{}
-			if s, ok := msg.Content.(string); ok && s != "" {
-				blocks = append(blocks, ContentBlock{Type: "text", Text: s})
-			}
-			for _, tc := range msg.ToolCalls {
-				argsMap := map[string]any{}
-				if tc.Function.Arguments != "" {
-					if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
-						fmt.Fprintf(stdout.Writer(), "[llm] WARNING: failed to parse tool call arguments JSON for %q: %v\n", tc.ID, err)
-					}
-				}
-				blocks = append(blocks, anthropicToolUseBlock{
-					Type:  "tool_use",
-					ID:    tc.ID,
-					Name:  tc.Function.Name,
-					Input: argsMap,
-				})
-			}
-			if len(blocks) > 0 {
-				messages = append(messages, anthroMessage{Role: "assistant", Content: blocks})
-			} else {
-				s, _ := msg.Content.(string)
-				messages = append(messages, anthroMessage{Role: "assistant", Content: s})
-			}
-		default:
-			// user or other roles: flush tool results first
-			flushToolResults()
-			content := msg.Content
-			if blkArr, ok := content.([]ContentBlock); ok {
-				converted := make([]ContentBlock, len(blkArr))
-				for i, b := range blkArr {
-					converted[i] = ContentBlock{
-						Type:      b.Type,
-						Text:      b.Text,
-						ToolUseID: b.ToolUseID,
-						Content:   b.Content,
-					}
-				}
-				content = converted
-			}
-			messages = append(messages, anthroMessage{Role: msg.Role, Content: content})
-		}
-	}
-	flushToolResults() // flush any remaining tool results at the end
-
-	tools := make([]anthroTool, 0, len(req.Tools))
-	for _, t := range req.Tools {
-		tools = append(tools, anthroTool{
-			Name:        t.Function.Name,
-			Description: t.Function.Description,
-			InputSchema: t.Function.Parameters,
-		})
-	}
-
-	maxTokens := req.MaxTokens
+	maxTokens := int64(req.MaxTokens)
 	if maxTokens <= 0 {
-		maxTokens = 8192 // Anthropic default
+		maxTokens = 8192
 	}
 
-	return anthropicRequest{
-		Model:       model,
-		MaxTokens:   maxTokens,
-		System:      systemMsg,
-		Messages:    messages,
-		Tools:       tools,
-		Stream:      false,
-		Temperature: req.Temperature,
+	params := anthropic.MessageNewParams{
+		Model:     model,
+		MaxTokens: maxTokens,
+		Messages:  messages,
 	}
+
+	if system != "" {
+		params.System = []anthropic.TextBlockParam{
+			{Text: system},
+		}
+	}
+
+	if len(req.Tools) > 0 {
+		params.Tools = convertToolsToAnthropic(req.Tools)
+	}
+
+	if req.Temperature != nil {
+		params.Temperature = anthropic.Float(*req.Temperature)
+	}
+
+	return params
 }
 
-func mergeExtraBody(base any, extraBody map[string]any) ([]byte, error) {
-	if len(extraBody) == 0 {
-		return json.Marshal(base)
+// buildExtraBodyOptions creates request options for ExtraBody fields.
+func (c *AnthropicClient) buildExtraBodyOptions() []anthropicoption.RequestOption {
+	if len(c.cfg.ExtraBody) == 0 {
+		return nil
 	}
-	b, err := json.Marshal(base)
-	if err != nil {
-		return nil, err
+	opts := make([]anthropicoption.RequestOption, 0, len(c.cfg.ExtraBody))
+	for k, v := range c.cfg.ExtraBody {
+		opts = append(opts, anthropicoption.WithJSONSet(k, v))
 	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-	for k, v := range extraBody {
-		m[k] = v
-	}
-	return json.Marshal(m)
+	return opts
 }
 
-// parseResponse converts Anthropic JSON response into ChatResponse.
-func (c *AnthropicClient) parseResponse(body []byte, headers http.Header) (*ChatResponse, error) {
-	type contentBlockResp struct {
-		Type  string `json:"type"`
-		Text  string `json:"text,omitempty"`
-		ID    string `json:"id,omitempty"`
-		Name  string `json:"name,omitempty"`
-		Input any    `json:"input,omitempty"`
-	}
-
-	type anthropicUsageRaw struct {
-		InputTokens              int64 `json:"input_tokens"`
-		OutputTokens             int64 `json:"output_tokens"`
-		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	}
-
-	var resp struct {
-		ID         string             `json:"id"`
-		Model      string             `json:"model"`
-		Type       string             `json:"type"`
-		Role       string             `json:"role"`
-		Content    []contentBlockResp `json:"content"`
-		Usage      anthropicUsageRaw  `json:"usage"`
-		StopReason string             `json:"stop_reason,omitempty"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
-	}
-
-	// Build the response message from content blocks.
+// convertResponse maps Anthropic SDK Message to our internal ChatResponse.
+func (c *AnthropicClient) convertResponse(msg *anthropic.Message, httpResp *http.Response) *ChatResponse {
 	var textParts []string
 	var toolCalls []ToolCall
 
-	for _, block := range resp.Content {
-		switch block.Type {
-		case "text":
-			textParts = append(textParts, block.Text)
-		case "tool_use":
-			argsJSON, _ := json.Marshal(block.Input)
+	for _, block := range msg.Content {
+		switch variant := block.AsAny().(type) {
+		case anthropic.TextBlock:
+			textParts = append(textParts, variant.Text)
+		case anthropic.ToolUseBlock:
+			argsJSON, _ := json.Marshal(variant.Input)
 			toolCalls = append(toolCalls, ToolCall{
-				ID:   block.ID,
+				ID:   variant.ID,
 				Type: "function",
 				Function: FunctionCall{
-					Name:      block.Name,
+					Name:      variant.Name,
 					Arguments: string(argsJSON),
 				},
 			})
@@ -862,28 +716,33 @@ func (c *AnthropicClient) parseResponse(body []byte, headers http.Header) (*Chat
 		contentStr = &s
 	}
 
-	finishReason := resp.StopReason
+	finishReason := string(msg.StopReason)
 	if finishReason == "" {
 		finishReason = "stop"
 	}
 
 	var usage *UsageInfo
-	if u := resp.Usage; u.InputTokens > 0 || u.OutputTokens > 0 {
+	if msg.Usage.InputTokens > 0 || msg.Usage.OutputTokens > 0 || msg.Usage.CacheReadInputTokens > 0 || msg.Usage.CacheCreationInputTokens > 0 {
 		usage = &UsageInfo{
-			PromptTokens:     u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens,
-			CompletionTokens: u.OutputTokens,
-			CacheReadTokens:  u.CacheReadInputTokens,
-			CacheWriteTokens: u.CacheCreationInputTokens,
+			PromptTokens:     msg.Usage.InputTokens,
+			CompletionTokens: msg.Usage.OutputTokens,
+			CacheReadTokens:  msg.Usage.CacheReadInputTokens,
+			CacheWriteTokens: msg.Usage.CacheCreationInputTokens,
 		}
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens + usage.CacheReadTokens + usage.CacheWriteTokens
+	}
+
+	var headers http.Header
+	if httpResp != nil {
+		headers = httpResp.Header
 	}
 
 	return &ChatResponse{
-		ID:    resp.ID,
-		Model: resp.Model,
+		ID:    msg.ID,
+		Model: string(msg.Model),
 		Choices: []Choice{{
 			Message: ResponseMessage{
-				Role:      resp.Role,
+				Role:      string(msg.Role),
 				Content:   contentStr,
 				ToolCalls: toolCalls,
 			},
@@ -891,104 +750,119 @@ func (c *AnthropicClient) parseResponse(body []byte, headers http.Header) (*Chat
 		}},
 		Headers: headers,
 		Usage:   usage,
-	}, nil
+	}
 }
 
-// --- Retry logic ---
+// convertMessagesToAnthropic separates system message and converts remaining messages.
+func convertMessagesToAnthropic(messages []Message) (string, []anthropic.MessageParam) {
+	var systemMsg string
+	var result []anthropic.MessageParam
+	var pendingToolResults []Message
 
-func retryWithCtx(ctx context.Context, fn func() error) error {
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled: %w", ctx.Err())
+	flushToolResults := func() {
+		if len(pendingToolResults) == 0 {
+			return
+		}
+		var blocks []anthropic.ContentBlockParamUnion
+		for _, tr := range pendingToolResults {
+			blocks = append(blocks, anthropic.NewToolResultBlock(
+				tr.ToolCallID,
+				tr.ExtractText(),
+				false,
+			))
+		}
+		result = append(result, anthropic.NewUserMessage(blocks...))
+		pendingToolResults = nil
+	}
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case "system":
+			if s, ok := msg.Content.(string); ok {
+				systemMsg = s
+			}
+			flushToolResults()
+		case "tool":
+			pendingToolResults = append(pendingToolResults, msg)
+		case "assistant":
+			flushToolResults()
+			var blocks []anthropic.ContentBlockParamUnion
+			text := msg.ExtractText()
+			if text != "" {
+				blocks = append(blocks, anthropic.NewTextBlock(text))
+			}
+			for _, tc := range msg.ToolCalls {
+				argsMap := map[string]any{}
+				if tc.Function.Arguments != "" {
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
+						fmt.Fprintf(stdout.Writer(), "[llm] WARNING: failed to parse tool call arguments JSON for %q: %v\n", tc.ID, err)
+					}
+				}
+				inputJSON, _ := json.Marshal(argsMap)
+				blocks = append(blocks, anthropic.ContentBlockParamUnion{
+					OfToolUse: &anthropic.ToolUseBlockParam{
+						ID:    tc.ID,
+						Name:  tc.Function.Name,
+						Input: json.RawMessage(inputJSON),
+					},
+				})
+			}
+			if len(blocks) > 0 {
+				result = append(result, anthropic.NewAssistantMessage(blocks...))
+			}
 		default:
-		}
-
-		lastErr = fn()
-		if lastErr == nil {
-			return nil
-		}
-
-		if !isRetryable(lastErr) {
-			return lastErr
-		}
-
-		if attempt < maxRetries {
-			sleepWithBackoff(attempt)
+			// user or other roles
+			flushToolResults()
+			result = append(result, anthropic.NewUserMessage(anthropic.NewTextBlock(msg.ExtractText())))
 		}
 	}
-	return fmt.Errorf("request failed after %d retries: %w", maxRetries, lastErr)
+	flushToolResults()
+
+	return systemMsg, result
 }
 
-func (c *OpenAIClient) withRetry(fn func() error) error {
-	return retryWithCtx(context.Background(), fn)
-}
-
-func (c *OpenAIClient) withRetryCtx(ctx context.Context, fn func() error) error {
-	return retryWithCtx(ctx, fn)
-}
-
-func (c *AnthropicClient) withRetry(fn func() error) error {
-	return retryWithCtx(context.Background(), fn)
-}
-
-func (c *AnthropicClient) withRetryCtx(ctx context.Context, fn func() error) error {
-	return retryWithCtx(ctx, fn)
-}
-
-// isRetryable determines whether an error is transient and worth retrying.
-func isRetryable(err error) bool {
-	msg := err.Error()
-	// 429 (rate limit) and 5xx server errors are retryable.
-	if strings.Contains(msg, "API error 429:") {
-		return true
-	}
-	for code := 500; code <= 599; code++ {
-		if strings.Contains(msg, fmt.Sprintf("API error %d:", code)) {
-			return true
+// convertToolsToAnthropic maps internal ToolDef slice to Anthropic SDK tool params.
+func convertToolsToAnthropic(tools []ToolDef) []anthropic.ToolUnionParam {
+	result := make([]anthropic.ToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		schema := anthropic.ToolInputSchemaParam{
+			Type:       "object",
+			Properties: t.Function.Parameters["properties"],
 		}
+		// Preserve required field constraints from the original schema.
+		if req, ok := t.Function.Parameters["required"]; ok {
+			if reqSlice, ok := req.([]any); ok {
+				required := make([]string, 0, len(reqSlice))
+				for _, r := range reqSlice {
+					if s, ok := r.(string); ok {
+						required = append(required, s)
+					}
+				}
+				schema.Required = required
+			}
+		}
+		result = append(result, anthropic.ToolUnionParam{
+			OfTool: &anthropic.ToolParam{
+				Name:        t.Function.Name,
+				Description: anthropic.String(t.Function.Description),
+				InputSchema: schema,
+			},
+		})
 	}
-	// Network-level errors (timeout, connection refused, DNS failure, etc.) are retryable.
-	if strings.Contains(msg, "request failed:") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "EOF") {
-		return true
-	}
-	return false
+	return result
 }
 
-// isRetryableStatus returns true for HTTP status codes that should trigger a retry.
-func isRetryableStatus(status int) bool {
-	return status == 429 || (status >= 500 && status <= 599)
+// normalizeAnthropicBaseURL strips the /v1/messages suffix since the SDK appends it.
+func normalizeAnthropicBaseURL(rawURL string) string {
+	u := strings.TrimRight(rawURL, "/")
+	u = strings.TrimSuffix(u, "/v1/messages")
+	return u
 }
 
-// sleepWithBackoff sleeps for baseDelay * 2^attempt + jitter, capped at 60s.
-// Jitter spreads retries randomly within ±50% of the computed delay.
-func sleepWithBackoff(attempt int) {
-	const (
-		baseDelay = 1 * time.Second
-		maxDelay  = 60 * time.Second
-	)
-
-	delay := baseDelay << uint(min(attempt, 6)) // 1s, 2s, 4s, 8s, 16s, 32s, 64s→capped
-	if delay > maxDelay {
-		delay = maxDelay
-	}
-
-	// Add random jitter: [delay*0.5, delay*1.5]
-	jitter := time.Duration(rand.Int63n(int64(delay))) - delay/2
-	delay += jitter
-
-	fmt.Fprintf(stdout.Writer(), "[llm] Retrying in %v (attempt info)... \n", delay)
-	time.Sleep(delay)
-}
+// --- Utility functions ---
 
 // stripThinkTags removes reasoning wrapper tags from content.
 func stripThinkTags(s string) string {
-	// Construct tag strings from individual bytes.
 	openBytes := []byte{0x3c, 't', 'h', 'i', 'n', 'k', 0x3e}
 	closeBytes := []byte{0x3c, 0x2f, 't', 'h', 'i', 'n', 'k', 0x3e}
 	s = strings.ReplaceAll(s, string(openBytes), "")
@@ -1025,7 +899,6 @@ func extractErrorMessage(body []byte) string {
 		return ae.Error.Message
 	}
 
-	// Truncate raw body to avoid excessively noisy errors.
 	bodyText := string(body)
 	if len(bodyText) > 512 {
 		bodyText = bodyText[:512] + "... (truncated)"

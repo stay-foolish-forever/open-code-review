@@ -115,3 +115,88 @@ func TestResolveEndpoint_ConfigFileStripsModelSuffix(t *testing.T) {
 		t.Errorf("expected source %q, got %q", "OCR config file", ep.Source)
 	}
 }
+
+func TestTryOCREnv_UseMaxCompletionTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		want     bool
+	}{
+		{"true", "true", true},
+		{"True_uppercase", "True", true},
+		{"1", "1", true},
+		{"yes", "yes", true},
+		{"false", "false", false},
+		{"0", "0", false},
+		{"empty_string", "", false},
+		{"invalid", "invalid", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("OCR_LLM_URL", "https://api.example.com/v1/chat/completions")
+			t.Setenv("OCR_LLM_TOKEN", "test-token")
+			t.Setenv("OCR_LLM_MODEL", "gpt-4")
+			t.Setenv("OCR_USE_ANTHROPIC", "false")
+			if tt.envValue != "" {
+				t.Setenv("OCR_USE_MAX_COMPLETION_TOKENS", tt.envValue)
+			} else {
+				t.Setenv("OCR_USE_MAX_COMPLETION_TOKENS", "")
+			}
+
+			ep, ok, err := tryOCREnv()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !ok {
+				t.Fatal("expected ok=true")
+			}
+			if ep.UseMaxCompletionTokens != tt.want {
+				t.Errorf("UseMaxCompletionTokens = %v, want %v", ep.UseMaxCompletionTokens, tt.want)
+			}
+		})
+	}
+}
+
+func TestTryOCRConfig_UseMaxCompletionTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		val  *bool
+		want bool
+	}{
+		{"explicit_true", boolPtr(true), true},
+		{"explicit_false", boolPtr(false), false},
+		{"unset_nil", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := configFile{
+				Llm: llmFileConfig{
+					URL:                    "https://api.example.com/v1/chat/completions",
+					AuthToken:              "test-token",
+					Model:                  "gpt-4",
+					UseMaxCompletionTokens: tt.val,
+				},
+			}
+			data, _ := json.Marshal(cfg)
+			cfgPath := filepath.Join(t.TempDir(), "config.json")
+			os.WriteFile(cfgPath, data, 0644)
+
+			ep, ok, err := tryOCRConfig(cfgPath)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !ok {
+				t.Fatal("expected ok=true")
+			}
+			if ep.UseMaxCompletionTokens != tt.want {
+				t.Errorf("UseMaxCompletionTokens = %v, want %v", ep.UseMaxCompletionTokens, tt.want)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}

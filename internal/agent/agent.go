@@ -661,9 +661,11 @@ func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFi
 	}
 	rec.SetResponse(resp, time.Since(startTime))
 	if resp.Usage != nil {
-		atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
-		atomic.AddInt64(&a.totalInputTokens, int64(resp.Usage.PromptTokens+resp.Usage.CacheReadTokens))
-		atomic.AddInt64(&a.totalOutputTokens, int64(resp.Usage.CompletionTokens+resp.Usage.CacheWriteTokens))
+		input := int64(resp.Usage.PromptTokens + resp.Usage.CacheReadTokens)
+		output := int64(resp.Usage.CompletionTokens + resp.Usage.CacheWriteTokens)
+		atomic.AddInt64(&a.totalTokensUsed, input+output)
+		atomic.AddInt64(&a.totalInputTokens, input)
+		atomic.AddInt64(&a.totalOutputTokens, output)
 	}
 	fmt.Fprintf(stdout.Writer(), "[ocr] Plan completed for %s\n", newPath)
 	return resp.Content(), nil
@@ -740,11 +742,13 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		}
 		rec.SetResponse(resp, duration)
 		// Record LLM metrics with token info from API response usage field.
-		totalTokens := int64(0)
+		var totalTokens int64
 		if resp.Usage != nil {
-			totalTokens = resp.Usage.TotalTokens
-			atomic.AddInt64(&a.totalInputTokens, int64(resp.Usage.PromptTokens+resp.Usage.CacheReadTokens))
-			atomic.AddInt64(&a.totalOutputTokens, int64(resp.Usage.CompletionTokens+resp.Usage.CacheWriteTokens))
+			input := int64(resp.Usage.PromptTokens + resp.Usage.CacheReadTokens)
+			output := int64(resp.Usage.CompletionTokens + resp.Usage.CacheWriteTokens)
+			totalTokens = input + output
+			atomic.AddInt64(&a.totalInputTokens, input)
+			atomic.AddInt64(&a.totalOutputTokens, output)
 		}
 		telemetry.RecordLLMRequest(ctx, a.args.Model, duration, totalTokens, "ok")
 		atomic.AddInt64(&a.totalTokensUsed, totalTokens)

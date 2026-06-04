@@ -24,7 +24,7 @@ func (m *mockLLMClient) CompletionsWithCtx(_ context.Context, req llm.ChatReques
 	return m.response, m.err
 }
 
-func (m *mockLLMClient) StreamCompletion(req llm.ChatRequest, cb func(chunk []byte) error) error {
+func (m *mockLLMClient) StreamCompletion(_ context.Context, req llm.ChatRequest, cb func(chunk []byte) error) error {
 	return m.err
 }
 
