@@ -172,8 +172,7 @@ script:
         "ocr", "review",
         "--from", f"origin/{TARGET_BRANCH}",
         "--to", f"origin/{SOURCE_BRANCH}",
-        "--format", "json",
-        "--audience", "agent"
+        "--format", "json"
     ], capture_output=True, text=True)
 
     # Save output for the posting script

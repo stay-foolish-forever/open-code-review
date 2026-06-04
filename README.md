@@ -208,11 +208,10 @@ The core command for CI integration:
 ocr review \
   --from "origin/main" \
   --to "origin/feature-branch" \
-  --format json \
-  --audience agent
+  --format json
 ```
 
-The `--format json` and `--audience agent` flags output machine-readable results suitable for parsing in CI scripts.
+The `--format json` flag outputs machine-readable results suitable for parsing in CI scripts.
 
 See the [`examples/`](./examples/) directory for integration examples:
 

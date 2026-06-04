@@ -42,7 +42,6 @@ code-review:
         --from "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}" \
         --to "origin/${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}" \
         --format json \
-        --audience agent \
         > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
       echo "OCR review completed."
       cat /tmp/ocr-result.json
@@ -139,10 +138,9 @@ code-review:
 
       # --- Main ---
 
-      # Read OCR result (skip first line which is summary, not JSON)
+      # Read OCR result
       try:
           with open("/tmp/ocr-result.json", "r") as f:
-              next(f)  # Skip first line
               result = json.load(f)
       except (FileNotFoundError, json.JSONDecodeError) as e:
           print(f"Failed to parse OCR output: {e}", file=sys.stderr)

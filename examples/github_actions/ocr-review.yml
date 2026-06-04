@@ -95,7 +95,6 @@ jobs:
             --from "origin/${BASE_REF}" \
             --to "origin/${HEAD_REF}" \
             --format json \
-            --audience agent \
             > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
 
           echo "OCR review completed. Output:"
@@ -111,12 +110,11 @@ jobs:
             const fs = require('fs');
             const path = '/tmp/ocr-result.json';
 
-            // Read OCR output (skip first line which is not valid JSON)
+            // Read OCR output
             let result;
             try {
               const raw = fs.readFileSync(path, 'utf8');
-              const jsonContent = raw.substring(raw.indexOf('\n') + 1);
-              result = JSON.parse(jsonContent);
+              result = JSON.parse(raw);
             } catch (e) {
               console.log('Failed to parse OCR output:', e.message);
               // Post a simple comment if parsing fails

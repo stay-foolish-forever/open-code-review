@@ -208,11 +208,10 @@ CI 集成的核心命令：
 ocr review \
   --from "origin/main" \
   --to "origin/feature-branch" \
-  --format json \
-  --audience agent
+  --format json
 ```
 
-`--format json` 和 `--audience agent` 参数输出适合 CI 脚本解析的机器可读结果。
+`--format json` 参数输出适合 CI 脚本解析的机器可读结果。
 
 集成示例请参见 [`examples/`](./examples/) 目录：
 
