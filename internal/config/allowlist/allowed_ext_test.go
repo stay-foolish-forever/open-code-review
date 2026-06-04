@@ -16,6 +16,10 @@ func TestIsAllowedExt(t *testing.T) {
 		{".tsx", true},
 		{".py", true},
 		{".rs", true},
+		{".ets", true},
+		{".ETS", true},
+		{".json5", true},
+		{".JSON5", true},
 		{".txt", false},
 		{".md", false},
 		{".png", false},
@@ -83,6 +87,12 @@ func TestIsExcludedPath(t *testing.T) {
 		// Rust test files
 		{"rust test file", "src/parser_test.rs", true},
 		{"rust non-test", "src/parser.rs", false},
+
+		// HarmonyOS oh_modules and test files
+		{"oh_modules root", "oh_modules/some_lib/index.ets", true},
+		{"oh_modules nested", "entry/oh_modules/lib/index.ets", true},
+		{"ets test file", "entry/src/test/Component.test.ets", true},
+		{"ets non-test", "entry/src/main/Component.ets", false},
 
 		// Case insensitive
 		{"case insensitive go", "Foo/Bar_Test.go", true},

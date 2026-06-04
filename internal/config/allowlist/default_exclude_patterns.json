@@ -12,5 +12,7 @@
   "**/spec/**/*_spec.rb",
   "**/*Test.java",
   "**/*Tests.java",
-  "**/*_test.rs"
+  "**/*_test.rs",
+  "**/oh_modules/**",
+  "**/*.test.ets"
 ]

@@ -72,6 +72,10 @@ func TestResolve_DefaultRules(t *testing.T) {
 		{"app.kt", "空安全"},
 		{"src/main/handler.cpp", "智能指针"},
 		{"driver.c", "malloc"},
+		{"pages/Index.ets", "状态装饰器"},
+		{"components/Button.ets", "状态装饰器"},
+		{"entry/src/main/module.json5", "json-key"},
+		{"entry/oh-package.json5", "json-key"},
 	}
 
 	for _, tt := range tests {
