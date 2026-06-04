@@ -27,7 +27,7 @@ code-review:
 
     # Configure OCR
     - mkdir -p ~/.open-code-review
-    # Gitlab CI/CD does not support confuring variables with value length less than 8, so you can't set use_anthropic as a CI variable
+    # Gitlab CI/CD does not support setting variables with value length less than 8, so you can't set use_anthropic as a CI variable
     - |
       ocr config set llm.url $OCR_LLM_URL
       ocr config set llm.auth_token $OCR_LLM_AUTH_TOKEN
