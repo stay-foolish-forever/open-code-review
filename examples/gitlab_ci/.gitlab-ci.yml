@@ -16,6 +16,8 @@ stages:
 
 code-review:
   stage: review
+  interruptible: true
+  resource_group: mr-review-$CI_MERGE_REQUEST_IID
   image: node:20
   only:
     - merge_requests
