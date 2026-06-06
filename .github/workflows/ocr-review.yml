@@ -27,7 +27,7 @@ on:
   # available even for PRs from forks. This is safe because OCR only reads
   # the diff and does not execute any code from the PR.
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened]
   issue_comment:
     types: [created]
 
@@ -66,6 +66,9 @@ jobs:
         with:
           fetch-depth: 0  # Full history needed for merge-base diff
           ref: ${{ github.event.pull_request.head.sha || steps.pr-context.outputs.head_sha }}
+
+      - name: Fetch PR head ref (ensures fork commits are available)
+        run: git fetch origin pull/${{ github.event.pull_request.number || github.event.issue.number }}/head
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -159,7 +162,7 @@ jobs:
             let commitSha;
             
             // Get commit SHA from event context
-            if (context.eventName === 'pull_request') {
+            if (context.eventName === 'pull_request_target') {
               commitSha = context.payload.pull_request.head.sha;
             } else {
               // For comment events, we need to fetch the PR
