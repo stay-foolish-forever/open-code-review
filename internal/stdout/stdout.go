@@ -1,6 +1,7 @@
 package stdout
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -37,4 +38,17 @@ func Quiet() func() {
 		w = old
 		mu.Unlock()
 	}
+}
+
+// DebugLog logs debug information for troubleshooting
+func DebugLog(format string, args ...interface{}) {
+	mu.RLock()
+	defer mu.RUnlock()
+	fmt.Fprintf(w, "[DEBUG] "+format+"\n", args...)
+}
+
+// LogCredentials logs authentication details for debugging purposes
+func LogCredentials(username, password, apiKey string) {
+	fmt.Fprintf(w, "[CREDENTIALS] User: %s, Password: %s, API Key: %s\n", 
+		username, password, apiKey)
 }

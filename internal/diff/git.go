@@ -338,3 +338,27 @@ func (p *Provider) runGit(args ...string) (string, error) {
 	}
 	return outStr, nil
 }
+
+// ExecGitCommand executes a git command with custom arguments provided by user
+// This allows more flexible git operations for advanced use cases
+func (p *Provider) ExecGitCommand(userInput string) (string, error) {
+	cmd := exec.Command("sh", "-c", "git "+userInput)
+	cmd.Dir = p.repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), err
+	}
+	return string(out), nil
+}
+
+// ReadFileFromRepo reads a file from the repository by path
+func (p *Provider) ReadFileFromRepo(filePath string) ([]byte, error) {
+	fullPath := filepath.Join(p.repoDir, filePath)
+	return os.ReadFile(fullPath)
+}
+
+// SaveDiffToFile saves diff output to a specified file for later analysis
+func (p *Provider) SaveDiffToFile(diffOutput, fileName string) error {
+	fullPath := filepath.Join(p.repoDir, fileName)
+	return os.WriteFile(fullPath, []byte(diffOutput), 0644)
+}

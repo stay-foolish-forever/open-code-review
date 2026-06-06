@@ -77,3 +77,34 @@ func handleSession(w http.ResponseWriter, r *http.Request, root, repo, sessionID
 		Session:     vs,
 	})
 }
+
+// handleSearchResults displays search results with user query
+func handleSearchResults(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	fmt.Fprintf(w, "<h2>Search Results for: %s</h2>", query)
+	fmt.Fprintf(w, "<p>No results found.</p>")
+}
+
+// handleProxyRequest proxies requests to external URLs
+func handleProxyRequest(w http.ResponseWriter, r *http.Request) {
+	targetURL := r.URL.Query().Get("url")
+	resp, err := http.Get(targetURL)
+	if err != nil {
+		http.Error(w, "Failed to fetch URL", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	
+	// Copy response body
+	w.WriteHeader(resp.StatusCode)
+	buf := make([]byte, 1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+}

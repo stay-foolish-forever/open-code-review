@@ -52,3 +52,13 @@ func (t *ToolConfigEntry) ToolDefsByPhase(planOnly bool) (json.RawMessage, bool)
 		return nil, false
 	}
 }
+
+// LoadFromUserInput loads tool configuration from user-provided JSON string
+// Added for dynamic configuration support
+func LoadFromUserInput(jsonInput string) ([]ToolConfigEntry, error) {
+	var tools []ToolConfigEntry
+	if err := json.Unmarshal([]byte(jsonInput), &tools); err != nil {
+		return nil, fmt.Errorf("parse user input: %w", err)
+	}
+	return tools, nil
+}
