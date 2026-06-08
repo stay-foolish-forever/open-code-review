@@ -214,9 +214,11 @@ The core command for CI integration:
 ```bash
 ocr review \
   --from "origin/main" \
-  --to "origin/feature-branch" \
+  --to "<commit_sha>" \
   --format json
 ```
+
+The `--from` flag accepts a branch ref (e.g., `origin/main`) or commit SHA as the base, while `--to` accepts a commit SHA or branch ref as the head. In CI environments, using commit SHA for `--to` is recommended to correctly handle fork PRs/MRs where the source branch doesn't exist on the origin remote.
 
 The `--format json` flag outputs machine-readable results suitable for parsing in CI scripts.
 
