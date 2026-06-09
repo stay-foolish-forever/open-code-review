@@ -16,6 +16,8 @@
 
 ---
 
+> 🚧 **Coming Soon**: The project maintainers are designing support for multi-model and multi-provider configuration, allowing you to configure multiple LLM providers and models simultaneously. This feature will be available soon — stay tuned!
+
 ## What is Open Code Review?
 
 Open Code Review is an AI-powered code review CLI tool. It originated as Alibaba Group's internal official AI code review assistant — over the past two years, it has served tens of thousands of developers and identified millions of code defects. After thorough validation at massive scale, we incubated it into an open source project for the community. Simply configure a model endpoint to get started.
