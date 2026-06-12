@@ -30,6 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Trust workspace
+        run: git config --global safe.directory '*'
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -84,6 +87,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Trust workspace
+        run: git config --global safe.directory '*'
 
       - name: Install jq
         run: apt-get update && apt-get install -y jq
