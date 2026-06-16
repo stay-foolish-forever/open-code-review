@@ -70,7 +70,7 @@ func runLLMTest() error {
 		return llmClient.CompletionsWithCtx(ctx, llm.ChatRequest{
 			Model:     ep.Model,
 			Messages:  messages,
-			MaxTokens: 256,
+			MaxTokens: 512,
 		})
 	}()
 	if err != nil {
@@ -84,7 +84,11 @@ func runLLMTest() error {
 	fmt.Printf("Source: %s\n", ep.Source)
 	fmt.Printf("URL:    %s\n", ep.URL)
 	fmt.Printf("Model:  %s\n", model)
-	fmt.Printf("%s\n", resp.Content())
+	if content := resp.Content(); content != "" {
+		fmt.Printf("LLM test succeeded with response: %s\n", content)
+	} else {
+		fmt.Println("LLM test succeeded.")
+	}
 	return nil
 }
 
