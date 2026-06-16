@@ -14,6 +14,12 @@
 # Optional secrets:
 #   OCR_LLM_MODEL      - Model name (default: gpt-4o)
 #
+# Optional variables (for retry/delay tuning):
+#   OCR_RETRY_BASE_DELAY - Base delay (ms) for exponential backoff on rate-limit retries (default: 2000)
+#   OCR_MAX_RETRIES      - Max retry attempts per comment when rate-limited (default: 3)
+#   OCR_SUCCESS_DELAY    - Delay (ms) between successful comment posts to pace requests (default: 2000)
+#   OCR_FAILURE_DELAY    - Delay (ms) after a non-rate-limit failure to pace subsequent requests (default: 1000)
+#
 # Note: GITHUB_TOKEN is automatically provided by GitHub Actions.
 
 name: OpenCodeReview PR Review
@@ -79,7 +85,7 @@ jobs:
         run: |
           npm install -g @alibaba-group/open-code-review
           echo "OpenCodeReview installed with version:"
-          ocr version
+          ocr version || true
 
       - name: Configure OCR
         run: |
@@ -248,8 +254,10 @@ jobs:
               // GitHub enforces ~80 content-generating requests per minute; spacing calls
               // helps stay under that threshold.
               const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-              const RETRY_BASE_DELAY = 2000; // 2 seconds base delay for exponential backoff
-              const MAX_RETRIES = 3;
+              const RETRY_BASE_DELAY = parseInt(process.env.OCR_RETRY_BASE_DELAY, 10) || 2000; // 2 seconds base delay for exponential backoff
+              const MAX_RETRIES = parseInt(process.env.OCR_MAX_RETRIES, 10) || 3;
+              const SUCCESS_DELAY = parseInt(process.env.OCR_SUCCESS_DELAY, 10) || 2000; // delay after successful post
+              const FAILURE_DELAY = parseInt(process.env.OCR_FAILURE_DELAY, 10) || 1000; // delay after non-rate-limit failure
 
               for (const { comment, reviewComment } of reviewComments) {
                 let posted = false;
@@ -268,9 +276,9 @@ jobs:
                     posted = true;
                     console.log(`Successfully posted comment for ${reviewComment.path}`);
                     // Delay between requests to avoid hitting secondary rate limits
-                    await sleep(2000);
+                    await sleep(SUCCESS_DELAY);
                   } catch (innerE) {
-                    const isRateLimit = innerE.status === 403 || innerE.status === 429;
+                    const isRateLimit = innerE.status === 429 || (innerE.status === 403 && /rate limit|abuse/i.test(innerE.message));
                     if (isRateLimit && attempt < MAX_RETRIES) {
                       const delay = RETRY_BASE_DELAY * Math.pow(2, attempt);
                       console.log(`Rate limit hit for ${reviewComment.path}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
@@ -280,7 +288,7 @@ jobs:
                       failedComments.push({ comment, error: innerE.message });
                       console.log(`Failed to post comment for ${reviewComment.path}: ${innerE.message}`);
                       // Still delay after a non-rate-limit failure to pace subsequent requests
-                      await sleep(1000);
+                      await sleep(FAILURE_DELAY);
                     }
                   }
                 }
