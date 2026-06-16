@@ -98,6 +98,19 @@ script:
   - ocr review --rule ./my-rules.json --from origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME --to $CI_COMMIT_SHA
 ```
 
+### Adjust retry and delay settings
+
+When posting review discussions, the script includes rate-limit handling with exponential backoff for GitLab API requests. You can configure the retry and delay behavior via **CI/CD Variables** (Settings → CI/CD → Variables):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OCR_RETRY_BASE_DELAY` | `2000` | Base delay (ms) for exponential backoff when a rate-limit error is hit |
+| `OCR_MAX_RETRIES` | `3` | Maximum retry attempts per discussion when rate-limited |
+| `OCR_SUCCESS_DELAY` | `2000` | Delay (ms) after a successful discussion post to pace subsequent requests |
+| `OCR_FAILURE_DELAY` | `1000` | Delay (ms) after a non-rate-limit failure to pace subsequent requests |
+
+These variables are optional — if not configured, sensible defaults are used. Consider increasing delays for self-hosted GitLab instances with aggressive rate-limit configurations or for large MRs that generate numerous review comments.
+
 ### Limit concurrency
 
 Adjust the `--concurrency` flag for large MRs to control the number of concurrent LLM requests:
