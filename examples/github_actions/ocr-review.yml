@@ -76,7 +76,10 @@ jobs:
           node-version: '20'
 
       - name: Install OpenCodeReview
-        run: npm install -g @alibaba-group/open-code-review
+        run: |
+          npm install -g @alibaba-group/open-code-review
+          echo "OpenCodeReview installed with version:"
+          ocr version
 
       - name: Configure OCR
         run: |
@@ -241,24 +244,45 @@ jobs:
               console.log('Failed to post review with inline comments:', e.message);
               console.log('Falling back to posting comments individually...');
               
-              // Fallback: post comments one by one
+              // Fallback: post comments one by one with delay to avoid secondary rate limits
+              // GitHub enforces ~80 content-generating requests per minute; spacing calls
+              // helps stay under that threshold.
+              const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+              const RETRY_BASE_DELAY = 2000; // 2 seconds base delay for exponential backoff
+              const MAX_RETRIES = 3;
+
               for (const { comment, reviewComment } of reviewComments) {
-                try {
-                  await github.rest.pulls.createReview({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    pull_number: prNumber,
-                    commit_id: commitSha,
-                    body: '',
-                    event: 'COMMENT',
-                    comments: [reviewComment]
-                  });
-                  successCount++;
-                  console.log(`Successfully posted comment for ${reviewComment.path}`);
-                } catch (innerE) {
-                  failedCount++;
-                  failedComments.push({ comment, error: innerE.message });
-                  console.log(`Failed to post comment for ${reviewComment.path}: ${innerE.message}`);
+                let posted = false;
+                for (let attempt = 0; attempt <= MAX_RETRIES && !posted; attempt++) {
+                  try {
+                    await github.rest.pulls.createReview({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: prNumber,
+                      commit_id: commitSha,
+                      body: '',
+                      event: 'COMMENT',
+                      comments: [reviewComment]
+                    });
+                    successCount++;
+                    posted = true;
+                    console.log(`Successfully posted comment for ${reviewComment.path}`);
+                    // Delay between requests to avoid hitting secondary rate limits
+                    await sleep(2000);
+                  } catch (innerE) {
+                    const isRateLimit = innerE.status === 403 || innerE.status === 429;
+                    if (isRateLimit && attempt < MAX_RETRIES) {
+                      const delay = RETRY_BASE_DELAY * Math.pow(2, attempt);
+                      console.log(`Rate limit hit for ${reviewComment.path}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                      await sleep(delay);
+                    } else {
+                      failedCount++;
+                      failedComments.push({ comment, error: innerE.message });
+                      console.log(`Failed to post comment for ${reviewComment.path}: ${innerE.message}`);
+                      // Still delay after a non-rate-limit failure to pace subsequent requests
+                      await sleep(1000);
+                    }
+                  }
                 }
               }
               
