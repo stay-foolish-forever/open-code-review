@@ -287,8 +287,9 @@ jobs:
                       failedCount++;
                       failedComments.push({ comment, error: innerE.message });
                       console.log(`Failed to post comment for ${reviewComment.path}: ${innerE.message}`);
-                      // Still delay after a non-rate-limit failure to pace subsequent requests
-                      await sleep(FAILURE_DELAY);
+                      // After exhausting rate-limit retries, use a longer delay; for other errors, use a shorter pace delay
+                      const postFailDelay = isRateLimit ? SUCCESS_DELAY : FAILURE_DELAY;
+                      await sleep(postFailDelay);
                     }
                   }
                 }

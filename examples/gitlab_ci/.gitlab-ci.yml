@@ -116,7 +116,9 @@ code-review:
               return None
 
       def api_request_with_retry(endpoint, data=None, method="POST"):
-          """Make a GitLab API request with retry on rate-limit errors."""
+          """Make a GitLab API request with retry on rate-limit errors.
+          Returns a dict: {'success': bool, 'data': response or None, 'is_rate_limit_exhausted': bool}
+          """
           for attempt in range(MAX_RETRIES + 1):
               url = f"{API_BASE}{endpoint}"
               headers = {
@@ -127,10 +129,10 @@ code-review:
               req = urllib.request.Request(url, data=body, headers=headers, method=method)
               try:
                   with urllib.request.urlopen(req) as resp:
-                      return json.loads(resp.read().decode("utf-8"))
+                      return {'success': True, 'data': json.loads(resp.read().decode("utf-8")), 'is_rate_limit_exhausted': False}
               except urllib.error.HTTPError as e:
                   error_body = e.read().decode('utf-8')
-                  is_rate_limit = e.code == 429 or (e.code == 403 and any(kw in error_body.lower() for kw in ['retry later', 'rate limit', 'too many requests']))
+                  is_rate_limit = e.code == 429 or (e.code == 403 and any(kw in error_body.lower() for kw in ['retry later', 'rate limit', 'too many requests', 'abuse']))
                   if is_rate_limit and attempt < MAX_RETRIES:
                       retry_after = e.headers.get('Retry-After')
                       delay = float(retry_after) if retry_after else RETRY_BASE_DELAY * (2 ** attempt)
@@ -138,8 +140,9 @@ code-review:
                       time.sleep(delay)
                   else:
                       print(f"API error {e.code}: {error_body}", file=sys.stderr)
-                      return None
-          return None
+                      # After exhausting rate-limit retries, mark it; for other errors, it's False
+                      return {'success': False, 'data': None, 'is_rate_limit_exhausted': is_rate_limit}
+          return {'success': False, 'data': None, 'is_rate_limit_exhausted': False}
 
       def post_note(body):
           """Post a general note/comment on the MR."""
@@ -256,12 +259,15 @@ code-review:
               continue
 
           result_resp = post_discussion(path, end_line, body, **diff_refs)
-          if result_resp:
+          if result_resp and result_resp.get('success'):
               success_count += 1
               time.sleep(SUCCESS_DELAY)  # Pace requests to avoid rate limits
           else:
               failed_comments.append(comment)
-              time.sleep(FAILURE_DELAY)  # Small delay after failure to pace subsequent requests
+              # Apply longer delay when rate-limit retries are exhausted, shorter delay for other errors
+              is_rate_limit_exhausted = result_resp.get('is_rate_limit_exhausted', False) if result_resp else False
+              post_fail_delay = SUCCESS_DELAY if is_rate_limit_exhausted else FAILURE_DELAY
+              time.sleep(post_fail_delay)
 
       print(f"Successfully posted {success_count}/{len(comments)} inline comments.")
 
