@@ -13,6 +13,12 @@
 #   GITLAB_API_TOKEN   - GitLab Personal/Project Access Token with "api" scope
 #                        (falls back to CI_JOB_TOKEN if not set)
 #
+# Optional CI/CD Variables (for retry/delay tuning):
+#   OCR_RETRY_BASE_DELAY - Base delay (ms) for exponential backoff on rate-limit retries (default: 2000)
+#   OCR_MAX_RETRIES      - Max retry attempts per comment when rate-limited (default: 3)
+#   OCR_SUCCESS_DELAY    - Delay (ms) after a successful comment post to pace requests (default: 2000)
+#   OCR_FAILURE_DELAY    - Delay (ms) after a non-rate-limit failure to pace subsequent requests (default: 1000)
+#
 # Fork MR Support:
 #   The script uses CI_COMMIT_SHA as the diff target to correctly resolve the
 #   source commit from forked repos. For some GitLab versions, you may need to enable:
@@ -34,6 +40,7 @@ code-review:
   script:
     # Install OpenCodeReview
     - npm install -g @alibaba-group/open-code-review
+    - echo "OpenCodeReview installed with version:" && ocr version || true
 
     # Configure OCR
     - mkdir -p ~/.open-code-review
@@ -63,6 +70,7 @@ code-review:
       import json
       import os
       import sys
+      import time
       import urllib.request
       import urllib.error
 
@@ -74,6 +82,12 @@ code-review:
       SOURCE_BRANCH = os.environ["CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"]
       TARGET_BRANCH = os.environ["CI_MERGE_REQUEST_TARGET_BRANCH_NAME"]
       COMMIT_SHA = os.environ["CI_COMMIT_SHA"]
+
+      # Configurable retry/delay settings (via CI/CD variables, with sensible defaults)
+      RETRY_BASE_DELAY = int(os.environ.get("OCR_RETRY_BASE_DELAY", "2000")) / 1000  # ms → seconds
+      MAX_RETRIES = int(os.environ.get("OCR_MAX_RETRIES", "3"))
+      SUCCESS_DELAY = int(os.environ.get("OCR_SUCCESS_DELAY", "2000")) / 1000
+      FAILURE_DELAY = int(os.environ.get("OCR_FAILURE_DELAY", "1000")) / 1000
 
       if not API_TOKEN:
           print("ERROR: No API token available (GITLAB_API_TOKEN or CI_JOB_TOKEN). Cannot post comments.", file=sys.stderr)
@@ -101,6 +115,32 @@ code-review:
               print(f"API error {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
               return None
 
+      def api_request_with_retry(endpoint, data=None, method="POST"):
+          """Make a GitLab API request with retry on rate-limit errors."""
+          for attempt in range(MAX_RETRIES + 1):
+              url = f"{API_BASE}{endpoint}"
+              headers = {
+                  AUTH_HEADER: API_TOKEN,
+                  "Content-Type": "application/json"
+              }
+              body = json.dumps(data).encode("utf-8") if data else None
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as e:
+                  error_body = e.read().decode('utf-8')
+                  is_rate_limit = e.code == 429 or (e.code == 403 and any(kw in error_body.lower() for kw in ['retry later', 'rate limit', 'too many requests']))
+                  if is_rate_limit and attempt < MAX_RETRIES:
+                      retry_after = e.headers.get('Retry-After')
+                      delay = float(retry_after) if retry_after else RETRY_BASE_DELAY * (2 ** attempt)
+                      print(f"Rate limit hit for {endpoint}, retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})", file=sys.stderr)
+                      time.sleep(delay)
+                  else:
+                      print(f"API error {e.code}: {error_body}", file=sys.stderr)
+                      return None
+          return None
+
       def post_note(body):
           """Post a general note/comment on the MR."""
           return api_request("/notes", {"body": body})
@@ -120,7 +160,7 @@ code-review:
               "body": body,
               "position": position
           }
-          return api_request("/discussions", data)
+          return api_request_with_retry("/discussions", data)
 
       def format_comment(comment):
           """Format a single review comment as markdown."""
@@ -218,8 +258,10 @@ code-review:
           result_resp = post_discussion(path, end_line, body, **diff_refs)
           if result_resp:
               success_count += 1
+              time.sleep(SUCCESS_DELAY)  # Pace requests to avoid rate limits
           else:
               failed_comments.append(comment)
+              time.sleep(FAILURE_DELAY)  # Small delay after failure to pace subsequent requests
 
       print(f"Successfully posted {success_count}/{len(comments)} inline comments.")
 
