@@ -91,6 +91,19 @@ Use the `--rule` flag to pass a custom rules JSON file:
   run: ocr review --rule ./my-rules.json --from origin/${{ github.base_ref }} --to origin/${{ github.head_ref }}
 ```
 
+### Adjust retry and delay settings
+
+When posting review comments individually (fallback mode), the workflow includes rate-limit handling with exponential backoff. You can configure the retry and delay behavior via **repository variables** (Settings → Secrets and variables → Actions → Variables):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OCR_RETRY_BASE_DELAY` | `2000` | Base delay (ms) for exponential backoff when a rate-limit error is hit |
+| `OCR_MAX_RETRIES` | `3` | Maximum retry attempts per comment when rate-limited |
+| `OCR_SUCCESS_DELAY` | `2000` | Delay (ms) after a successful comment post to pace subsequent requests |
+| `OCR_FAILURE_DELAY` | `1000` | Delay (ms) after a non-rate-limit failure to pace subsequent requests |
+
+These variables are optional — if not configured, sensible defaults are used. Consider increasing delays for repositories with many concurrent workflows or large PRs that generate numerous review comments.
+
 ### Limit concurrency
 
 Adjust the `--concurrency` flag for large PRs to control the number of concurrent LLM requests:
