@@ -1,11 +1,10 @@
-# OpenCodeReview - GitHub Actions PR Auto-Review Demo
+# OpenCodeReview - GitHub Actions PR Auto-Review Pipeline
 #
 # This workflow automatically reviews pull requests using OpenCodeReview
 # and posts review comments directly on the PR.
 #
 # Triggers:
 #   - PR opened (uses pull_request_target for fork secret access)
-#   - Comment on PR containing '/open-code-review' or '@open-code-review'
 #
 # Required secrets:
 #   OCR_LLM_URL        - LLM API endpoint (e.g., https://api.openai.com/v1/chat/completions)
@@ -13,8 +12,34 @@
 #
 # Optional secrets:
 #   OCR_LLM_MODEL      - Model name (default: gpt-4o)
+#   OCR_LLM_USE_ANTHROPIC - Set to 'true' if using Anthropic Claude models
+#
+# Optional variables (for retry/delay tuning):
+# The retry strategy follows GitHub's documented guidance for REST API rate limits:
+#   https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+#   - Primary rate limit exhausted (x-ratelimit-remaining=0): wait until x-ratelimit-reset.
+#   - Secondary rate limit with a retry-after header: wait exactly that long.
+#   - Secondary rate limit with NO header: wait at least one minute, then use
+#     exponential backoff on continued failures.
+#
+#   OCR_RETRY_BASE_DELAY     - Base delay (ms) for exponential backoff when no retry
+#                             header is present (default: 60000, per GitHub's
+#                             "at least one minute" recommendation for secondary limits).
+#   OCR_RETRY_MAX_DELAY     - Maximum delay (ms) cap applied to EVERY computed wait,
+#                             including retry-after and x-ratelimit-reset, so a far-future
+#                             reset cannot stall the job past its timeout (default: 300000 = 5 min).
+#   OCR_MAX_RETRIES         - Max retry attempts per comment when rate-limited (default: 3).
+#   OCR_SUCCESS_DELAY       - Delay (ms) between successful comment posts to pace requests (default: 2000).
+#   OCR_FAILURE_DELAY       - Delay (ms) after a non-retryable failure to pace subsequent requests (default: 1000).
+#   OCR_LOW_REMAINING_THRESHOLD - When x-ratelimit-remaining is at or below this value,
+#                             proactively increase request spacing to avoid hitting the limit
+#                             (default: 3; GitHub best practice is to watch the header and slow down).
+#   OCR_LOW_REMAINING_SPACING - Request spacing (ms) used when remaining quota is low
+#                             (default: 10000 = 10s).
 #
 # Note: GITHUB_TOKEN is automatically provided by GitHub Actions.
+# Note: The workflow also configures llm.extra_body to '{"thinking": {"type": "disabled"}}'
+#   to disable thinking mode for compatibility with various LLM providers.
 
 name: OpenCodeReview PR Review
 
