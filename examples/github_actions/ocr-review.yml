@@ -378,6 +378,14 @@ jobs:
               return new Promise(resolve => setTimeout(resolve, ms));
             }
 
+            // Case-insensitive header lookup. Octokit normalizes response headers to
+            // lowercase, but this defensive check also handles original casing so that
+            // quota logging and retry delay computation never silently miss a header.
+            function getHeader(headers, name) {
+              const v = headers[name] != null ? headers[name] : headers[name.toLowerCase()];
+              return v != null ? String(v).trim() : undefined;
+            }
+
             // Decide whether an error is worth retrying and, if so, how long to wait.
             // Implements GitHub's documented rate-limit retry strategy using the
             // response headers (retry-after, x-ratelimit-remaining, x-ratelimit-reset).
@@ -392,10 +400,7 @@ jobs:
               if (!isRateLimit && !isTransient) return null;
 
               const headers = ((error.response || {}).headers) || {};
-              const header = (name) => {
-                const v = headers[name] != null ? headers[name] : headers[name.toLowerCase()];
-                return v != null ? String(v).trim() : undefined;
-              };
+              const header = (name) => getHeader(headers, name);
               const nowSec = Math.floor(Date.now() / 1000);
 
               // The absolute maximum wait for any single retry. Header-derived waits
@@ -442,9 +447,13 @@ jobs:
                 }
               } else {
                 // Transient server error (5xx / 408): back off without the 60s floor.
-                const backoff = Math.min(base * Math.pow(2, attempt), cap);
+                // Use a shorter base than the rate-limit path: server hiccups are
+                // typically short-lived, so a 2s initial wait (doubling per retry)
+                // is sufficient and avoids stalling the CI job unnecessarily.
+                const transientBase = 2000;
+                const backoff = Math.min(transientBase * Math.pow(2, attempt), cap);
                 const jitter = Math.floor(Math.random() * 1000);
-                info = { rawMs: backoff + jitter, source: 'transient-backoff', detail: `base=${base}ms*2^${attempt} (cap ${cap}ms) +${jitter}ms jitter (HTTP ${status})` };
+                info = { rawMs: backoff + jitter, source: 'transient-backoff', detail: `base=${transientBase}ms*2^${attempt} (cap ${cap}ms) +${jitter}ms jitter (HTTP ${status})` };
               }
 
               // Apply the universal cap to header-derived waits too.
@@ -460,9 +469,10 @@ jobs:
             function logRateLimitQuota(response, tag) {
               try {
                 const h = (response && response.headers) || {};
-                const remaining = h['x-ratelimit-remaining'];
-                const limit = h['x-ratelimit-limit'];
-                const reset = h['x-ratelimit-reset'];
+                const header = (name) => getHeader(h, name);
+                const remaining = header('x-ratelimit-remaining');
+                const limit = header('x-ratelimit-limit');
+                const reset = header('x-ratelimit-reset');
                 if (remaining != null) {
                   console.log(
                     `[rate-limit] ${tag}: remaining=${remaining}/${limit != null ? limit : '?'}` +

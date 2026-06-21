@@ -15,7 +15,7 @@
 #
 # Optional CI/CD Variables (for retry/delay tuning):
 #   OCR_RETRY_BASE_DELAY    - Base delay (ms) for exponential backoff on rate-limit retries (default: 2000)
-#   OCR_MAX_RETRIES         - Max retry attempts per comment when rate-limited (default: 3)
+#   OCR_MAX_RETRIES         - Max retry attempts per comment when rate-limited or transient error (default: 3)
 #   OCR_MAX_RETRY_DELAY     - Maximum delay (ms) per single retry, caps Retry-After/backoff (default: 60000)
 #   OCR_SUCCESS_DELAY       - Delay (ms) after a successful comment post to pace requests (default: 2000)
 #   OCR_FAILURE_DELAY       - Delay (ms) after a non-rate-limit failure to pace subsequent requests (default: 1000)
@@ -95,6 +95,10 @@ code-review:
       MAX_RETRY_DELAY = int(os.environ.get("OCR_MAX_RETRY_DELAY", "60000")) / 1000  # ms → seconds, cap per-retry wait
       SUCCESS_DELAY = int(os.environ.get("OCR_SUCCESS_DELAY", "2000")) / 1000
       FAILURE_DELAY = int(os.environ.get("OCR_FAILURE_DELAY", "1000")) / 1000
+      # Base delay (seconds) for exponential backoff on transient server errors (5xx / 408).
+      # Server hiccups are typically short-lived, so a 2s initial wait (doubling per retry)
+      # is sufficient and avoids stalling the CI job unnecessarily.
+      TRANSIENT_BASE_DELAY = 2
       # Proactive throttling: when RateLimit-Remaining drops to/below this threshold,
       # the script doubles the pacing delay to avoid hitting 429. Set to 0 to disable.
       RATE_LIMIT_THRESHOLD = int(os.environ.get("OCR_RATE_LIMIT_THRESHOLD", "10"))
@@ -109,9 +113,24 @@ code-review:
       USE_JOB_TOKEN = not os.environ.get("GITLAB_API_TOKEN")
       AUTH_HEADER = "JOB-TOKEN" if USE_JOB_TOKEN else "PRIVATE-TOKEN"
 
+      def _get_header(headers, name):
+          """Case-insensitive header lookup.
+
+          urllib normalizes response header keys to title-case (e.g. 'Retry-After'),
+          but this defensive check also handles original casing so that retry delay
+          computation and quota logging never silently miss a header.
+          """
+          if name in headers:
+              val = headers[name]
+          elif name.lower() in headers:
+              val = headers[name.lower()]
+          else:
+              return None
+          return str(val).strip() if val is not None else None
+
       def _parse_rate_limit_header(headers, name):
           """Safely parse a rate-limit response header (e.g. RateLimit-Remaining) as an int."""
-          val = headers.get(name)
+          val = _get_header(headers, name)
           if val is None:
               return None
           try:
@@ -143,20 +162,29 @@ code-review:
               except urllib.error.HTTPError as e:
                   error_body = e.read().decode('utf-8')
                   is_rate_limit = e.code == 429 or (e.code == 403 and any(kw in error_body.lower() for kw in ['retry later', 'rate limit', 'too many requests', 'abuse']))
+                  # Transient server errors (5xx) and request timeouts (408) are worth retrying
+                  # with a short exponential backoff, since they are typically short-lived.
+                  is_transient = (500 <= e.code < 600) or e.code == 408
                   rl_remaining = _parse_rate_limit_header(e.headers, 'RateLimit-Remaining')
-                  if is_rate_limit and attempt < MAX_RETRIES:
-                      retry_after = e.headers.get('Retry-After')
+                  if (is_rate_limit or is_transient) and attempt < MAX_RETRIES:
+                      retry_after = _get_header(e.headers, 'Retry-After')
                       if retry_after:
                           try:
                               delay = float(retry_after)
                           except ValueError:
                               delay = RETRY_BASE_DELAY * (2 ** attempt)  # fallback if Retry-After is not numeric
+                      elif is_transient:
+                          # Transient server error: use a shorter base than the rate-limit path.
+                          # Server hiccups are typically short-lived, so a 2s initial wait
+                          # (doubling per retry) is sufficient.
+                          delay = TRANSIENT_BASE_DELAY * (2 ** attempt)
                       else:
                           delay = RETRY_BASE_DELAY * (2 ** attempt)
                       delay = min(delay, MAX_RETRY_DELAY)  # cap to prevent long stalls
                       delay = delay * (0.75 + random.random() * 0.5)  # ±25% jitter to avoid thundering herd
                       rl_info = f" (RateLimit-Remaining: {rl_remaining})" if rl_remaining is not None else ""
-                      print(f"Rate limit hit for {endpoint}, retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}){rl_info}", file=sys.stderr)
+                      reason = "rate limit" if is_rate_limit else f"transient error (HTTP {e.code})"
+                      print(f"{reason} hit for {endpoint}, retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}){rl_info}", file=sys.stderr)
                       time.sleep(delay)
                   else:
                       print(f"API error {e.code}: {error_body}", file=sys.stderr)
