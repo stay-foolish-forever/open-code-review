@@ -4,6 +4,14 @@
   </a>
 </p>
 <p align="center">AI-агент код-ревью с открытым исходным кодом.</p>
+
+---
+
+<p align="center">
+  <a href="https://trendshift.io/repositories/41087" target="_blank">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/41087/weekly?language=Go" alt="alibaba%2Fopen-code-review | Trendshift" style="width: 250px; height: 55px;" width="250" height="55" />
+  </a>
+</p>
 <p align="center">
   <a href="https://www.npmjs.com/package/@alibaba-group/open-code-review"><img alt="npm" src="https://img.shields.io/npm/v/@alibaba-group/open-code-review?style=flat-square" /></a>
   <a href="https://github.com/alibaba/open-code-review/actions/workflows/release.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/alibaba/open-code-review/release.yml?style=flat-square" /></a>
