@@ -14,10 +14,12 @@
 #                        (falls back to CI_JOB_TOKEN if not set)
 #
 # Optional CI/CD Variables (for retry/delay tuning):
-#   OCR_RETRY_BASE_DELAY - Base delay (ms) for exponential backoff on rate-limit retries (default: 2000)
-#   OCR_MAX_RETRIES      - Max retry attempts per comment when rate-limited (default: 3)
-#   OCR_SUCCESS_DELAY    - Delay (ms) after a successful comment post to pace requests (default: 2000)
-#   OCR_FAILURE_DELAY    - Delay (ms) after a non-rate-limit failure to pace subsequent requests (default: 1000)
+#   OCR_RETRY_BASE_DELAY    - Base delay (ms) for exponential backoff on rate-limit retries (default: 2000)
+#   OCR_MAX_RETRIES         - Max retry attempts per comment when rate-limited (default: 3)
+#   OCR_MAX_RETRY_DELAY     - Maximum delay (ms) per single retry, caps Retry-After/backoff (default: 60000)
+#   OCR_SUCCESS_DELAY       - Delay (ms) after a successful comment post to pace requests (default: 2000)
+#   OCR_FAILURE_DELAY       - Delay (ms) after a non-rate-limit failure to pace subsequent requests (default: 1000)
+#   OCR_RATE_LIMIT_THRESHOLD - Proactively slow down when GitLab RateLimit-Remaining is at/below this value (default: 10, set 0 to disable)
 #
 # Fork MR Support:
 #   The script uses CI_COMMIT_SHA as the diff target to correctly resolve the
@@ -69,6 +71,7 @@ code-review:
       python3 << 'PYTHON_SCRIPT'
       import json
       import os
+      import random
       import sys
       import time
       import urllib.request
@@ -86,8 +89,12 @@ code-review:
       # Configurable retry/delay settings (via CI/CD variables, with sensible defaults)
       RETRY_BASE_DELAY = int(os.environ.get("OCR_RETRY_BASE_DELAY", "2000")) / 1000  # ms → seconds
       MAX_RETRIES = int(os.environ.get("OCR_MAX_RETRIES", "3"))
+      MAX_RETRY_DELAY = int(os.environ.get("OCR_MAX_RETRY_DELAY", "60000")) / 1000  # ms → seconds, cap per-retry wait
       SUCCESS_DELAY = int(os.environ.get("OCR_SUCCESS_DELAY", "2000")) / 1000
       FAILURE_DELAY = int(os.environ.get("OCR_FAILURE_DELAY", "1000")) / 1000
+      # Proactive throttling: when RateLimit-Remaining drops to/below this threshold,
+      # the script doubles the pacing delay to avoid hitting 429. Set to 0 to disable.
+      RATE_LIMIT_THRESHOLD = int(os.environ.get("OCR_RATE_LIMIT_THRESHOLD", "10"))
 
       if not API_TOKEN:
           print("ERROR: No API token available (GITLAB_API_TOKEN or CI_JOB_TOKEN). Cannot post comments.", file=sys.stderr)
@@ -99,25 +106,20 @@ code-review:
       USE_JOB_TOKEN = not os.environ.get("GITLAB_API_TOKEN")
       AUTH_HEADER = "JOB-TOKEN" if USE_JOB_TOKEN else "PRIVATE-TOKEN"
 
-      def api_request(endpoint, data=None, method="POST"):
-          """Make a GitLab API request."""
-          url = f"{API_BASE}{endpoint}"
-          headers = {
-              AUTH_HEADER: API_TOKEN,
-              "Content-Type": "application/json"
-          }
-          body = json.dumps(data).encode("utf-8") if data else None
-          req = urllib.request.Request(url, data=body, headers=headers, method=method)
+      def _parse_rate_limit_header(headers, name):
+          """Safely parse a rate-limit response header (e.g. RateLimit-Remaining) as an int."""
+          val = headers.get(name)
+          if val is None:
+              return None
           try:
-              with urllib.request.urlopen(req) as resp:
-                  return json.loads(resp.read().decode("utf-8"))
-          except urllib.error.HTTPError as e:
-              print(f"API error {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+              return int(val)
+          except (ValueError, TypeError):
               return None
 
       def api_request_with_retry(endpoint, data=None, method="POST"):
           """Make a GitLab API request with retry on rate-limit errors.
-          Returns a dict: {'success': bool, 'data': response or None, 'is_rate_limit_exhausted': bool}
+          Returns a dict: {'success': bool, 'data': response or None,
+                           'is_rate_limit_exhausted': bool, 'rate_limit_remaining': int or None}
           """
           for attempt in range(MAX_RETRIES + 1):
               url = f"{API_BASE}{endpoint}"
@@ -129,24 +131,38 @@ code-review:
               req = urllib.request.Request(url, data=body, headers=headers, method=method)
               try:
                   with urllib.request.urlopen(req) as resp:
-                      return {'success': True, 'data': json.loads(resp.read().decode("utf-8")), 'is_rate_limit_exhausted': False}
+                      resp_data = json.loads(resp.read().decode("utf-8"))
+                      remaining = _parse_rate_limit_header(resp.headers, 'RateLimit-Remaining')
+                      limit = _parse_rate_limit_header(resp.headers, 'RateLimit-Limit')
+                      if remaining is not None and limit is not None:
+                          print(f"RateLimit: {remaining}/{limit} remaining for {endpoint}", file=sys.stderr)
+                      return {'success': True, 'data': resp_data, 'is_rate_limit_exhausted': False, 'rate_limit_remaining': remaining}
               except urllib.error.HTTPError as e:
                   error_body = e.read().decode('utf-8')
                   is_rate_limit = e.code == 429 or (e.code == 403 and any(kw in error_body.lower() for kw in ['retry later', 'rate limit', 'too many requests', 'abuse']))
+                  rl_remaining = _parse_rate_limit_header(e.headers, 'RateLimit-Remaining')
                   if is_rate_limit and attempt < MAX_RETRIES:
                       retry_after = e.headers.get('Retry-After')
-                      delay = float(retry_after) if retry_after else RETRY_BASE_DELAY * (2 ** attempt)
-                      print(f"Rate limit hit for {endpoint}, retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})", file=sys.stderr)
+                      if retry_after:
+                          try:
+                              delay = float(retry_after)
+                          except ValueError:
+                              delay = RETRY_BASE_DELAY * (2 ** attempt)  # fallback if Retry-After is not numeric
+                      else:
+                          delay = RETRY_BASE_DELAY * (2 ** attempt)
+                      delay = min(delay, MAX_RETRY_DELAY)  # cap to prevent long stalls
+                      delay = delay * (0.75 + random.random() * 0.5)  # ±25% jitter to avoid thundering herd
+                      rl_info = f" (RateLimit-Remaining: {rl_remaining})" if rl_remaining is not None else ""
+                      print(f"Rate limit hit for {endpoint}, retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}){rl_info}", file=sys.stderr)
                       time.sleep(delay)
                   else:
                       print(f"API error {e.code}: {error_body}", file=sys.stderr)
-                      # After exhausting rate-limit retries, mark it; for other errors, it's False
-                      return {'success': False, 'data': None, 'is_rate_limit_exhausted': is_rate_limit}
-          return {'success': False, 'data': None, 'is_rate_limit_exhausted': False}
+                      return {'success': False, 'data': None, 'is_rate_limit_exhausted': is_rate_limit, 'rate_limit_remaining': rl_remaining}
+          return {'success': False, 'data': None, 'is_rate_limit_exhausted': False, 'rate_limit_remaining': None}
 
       def post_note(body):
-          """Post a general note/comment on the MR."""
-          return api_request("/notes", {"body": body})
+          """Post a general note/comment on the MR (with rate-limit retry)."""
+          return api_request_with_retry("/notes", {"body": body})
 
       def post_discussion(path, line, body, base_sha, start_sha, head_sha):
           """Post an inline discussion on a specific file/line in the MR diff."""
@@ -227,13 +243,11 @@ code-review:
           print("No review comments to post.")
           sys.exit(0)
 
-      # Get MR diff metadata for position calculation
+      # Get MR diff metadata for position calculation (uses retry to avoid single-point-of-failure)
       diff_refs = None
-      try:
-          versions_url = f"{API_BASE}/versions"
-          req = urllib.request.Request(versions_url, headers={AUTH_HEADER: API_TOKEN})
-          with urllib.request.urlopen(req) as resp:
-              versions = json.loads(resp.read().decode("utf-8"))
+      versions_resp = api_request_with_retry("/versions", method="GET")
+      if versions_resp and versions_resp.get('success'):
+          versions = versions_resp.get('data', [])
           if versions:
               latest = versions[0]
               diff_refs = {
@@ -241,8 +255,8 @@ code-review:
                   "start_sha": latest.get("start_commit_sha", ""),
                   "head_sha": latest.get("head_commit_sha", ""),
               }
-      except Exception as e:
-          print(f"Warning: Could not fetch MR versions: {e}", file=sys.stderr)
+      if not diff_refs:
+          print("Warning: Could not fetch MR versions. Inline comments will use fallback.", file=sys.stderr)
 
       # Post inline discussions for each comment
       success_count = 0
@@ -261,7 +275,14 @@ code-review:
           result_resp = post_discussion(path, end_line, body, **diff_refs)
           if result_resp and result_resp.get('success'):
               success_count += 1
-              time.sleep(SUCCESS_DELAY)  # Pace requests to avoid rate limits
+              # Proactive throttling: slow down when GitLab reports low remaining quota
+              remaining = result_resp.get('rate_limit_remaining')
+              if RATE_LIMIT_THRESHOLD > 0 and remaining is not None and remaining <= RATE_LIMIT_THRESHOLD:
+                  pace_delay = SUCCESS_DELAY * 2
+                  print(f"Rate limit quota low ({remaining} remaining), increasing pacing delay to {pace_delay:.1f}s", file=sys.stderr)
+                  time.sleep(pace_delay)
+              else:
+                  time.sleep(SUCCESS_DELAY)  # Pace requests to avoid rate limits
           else:
               failed_comments.append(comment)
               # Apply longer delay when rate-limit retries are exhausted, shorter delay for other errors
