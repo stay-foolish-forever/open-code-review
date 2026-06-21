@@ -100,7 +100,7 @@ script:
 
 ### Adjust retry and delay settings
 
-When posting review discussions, the script includes rate-limit handling with exponential backoff (with jitter), `Retry-After` header support, and proactive throttling based on GitLab's `RateLimit-Remaining` response header. All API requests — including summary notes and MR version fetches — use the same retry logic. You can configure the retry and delay behavior via **CI/CD Variables** (Settings → CI/CD → Variables):
+When posting review discussions, the script includes rate-limit handling with exponential backoff (with jitter), `Retry-After` header support, and proactive throttling based on GitLab's `RateLimit-Remaining` response header. All API requests — including summary notes and MR version fetches — use the same retry logic. See [GitLab Rate Limits](https://docs.gitlab.com/security/rate_limits/) for details on GitLab's rate-limiting policies and recommended handling. You can configure the retry and delay behavior via **CI/CD Variables** (Settings → CI/CD → Variables):
 
 | Variable | Default | Description |
 |----------|---------|-------------|

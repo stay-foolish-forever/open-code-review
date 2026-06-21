@@ -13,6 +13,7 @@
 #
 # Optional secrets:
 #   OCR_LLM_MODEL      - Model name (default: gpt-4o)
+#   OCR_LLM_USE_ANTHROPIC - Set to 'true' if using Anthropic Claude models
 #
 # Optional variables (for retry/delay tuning):
 # The retry strategy follows GitHub's documented guidance for REST API rate limits:
@@ -38,6 +39,8 @@
 #                             (default: 10000 = 10s).
 #
 # Note: GITHUB_TOKEN is automatically provided by GitHub Actions.
+# Note: The workflow also configures llm.extra_body to '{"thinking": {"type": "disabled"}}'
+#   to disable thinking mode for compatibility with various LLM providers.
 
 name: OpenCodeReview PR Review
 
