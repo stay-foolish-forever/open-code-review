@@ -35,7 +35,7 @@
 
 Open Code Review는 AI 기반 코드 리뷰 CLI 도구입니다. Alibaba Group의 내부 공식 AI 코드 리뷰 어시스턴트에서 시작했으며, 지난 2년 동안 수만 명의 개발자에게 제공되어 수백만 건의 코드 결함을 찾아냈습니다. 대규모 환경에서 충분히 검증한 뒤 커뮤니티를 위해 오픈 소스 프로젝트로 공개했습니다. 모델 endpoint만 설정하면 바로 사용할 수 있습니다.
 
-이 도구는 Git diff를 읽고, 변경 파일을 tool-use 기능을 가진 agent를 통해 설정 가능한 LLM으로 전달한 뒤, 라인 단위 위치 정보가 포함된 구조화된 리뷰 코멘트를 생성합니다. agent는 전체 파일 내용 읽기, 코드베이스 검색, 다른 변경 파일 확인 등을 통해 맥락을 확보하고 표면적인 diff 피드백이 아닌 깊이 있는 리뷰를 수행할 수 있습니다.
+이 도구는 Git diff를 읽고, 변경 파일을 tool-use 기능을 가진 agent를 통해 설정 가능한 LLM으로 전달한 뒤, 라인 단위 위치 정보가 포함된 구조화된 리뷰 코멘트를 생성합니다. agent는 전체 파일 내용 읽기, 코드베이스 검색, 다른 변경 파일 확인 등을 통해 맥락을 확보하고 표면적인 diff 피드백이 아닌 깊이 있는 리뷰를 수행할 수 있습니다. diff 리뷰 외에도 `ocr scan`은 전체 파일을 리뷰할 수 있어, 익숙하지 않은 코드베이스를 감사하거나 의미 있는 diff가 없는 디렉터리를 검토하는 데 유용합니다.
 
 ![Highlights](imgs/highlights-en.png)
 
@@ -227,6 +227,10 @@ ocr review --from main --to feature-branch
 
 # 단일 commit
 ocr review --commit abc123
+
+# 전체 파일 스캔 — diff 대신 파일 전체를 리뷰 (git 이력 불필요)
+ocr scan                          # 전체 repository 스캔
+ocr scan --path internal/agent    # 디렉터리 또는 특정 파일 스캔
 ```
 
 ### Coding Agent와 통합
@@ -336,7 +340,8 @@ ocr review \
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `ocr review` | `ocr r` | 코드 리뷰 시작 |
+| `ocr review` | `ocr r` | diff 기반 코드 리뷰 시작 |
+| `ocr scan` | `ocr s` | 전체 파일 리뷰 (diff 불필요) |
 | `ocr rules check <file>` | - | 파일 경로에 적용될 리뷰 rule 미리보기 |
 | `ocr config provider` | - | 대화형 provider 설정 (built-in, custom, 수동) |
 | `ocr config model` | - | 활성 provider의 대화형 model 선택 |
@@ -355,6 +360,7 @@ ocr review \
 | `--from` | - | - | Source ref 예: `main` |
 | `--to` | - | - | Target ref 예: `feature-branch` |
 | `--commit` | `-c` | - | 리뷰할 단일 commit |
+| `--exclude` | - | - | 건너뛸 파일의 쉼표 구분 gitignore 스타일 패턴; rule.json의 excludes와 병합 |
 | `--preview` | `-p` | `false` | LLM 실행 없이 리뷰 대상 파일 미리보기 |
 | `--format` | `-f` | `text` | Output format: `text` 또는 `json` |
 | `--concurrency` | - | `8` | 최대 동시 파일 리뷰 수 |
@@ -366,6 +372,27 @@ ocr review \
 | `--max-tools` | - | built-in | 파일별 최대 tool call round. template default보다 클 때만 적용 |
 | `--max-git-procs` | - | built-in | 최대 동시 git subprocess 수 |
 | `--tools` | - | - | custom JSON tools config 경로 |
+
+### `ocr scan` Flags
+
+`ocr scan`은 diff가 아닌 전체 파일을 리뷰합니다 — 익숙하지 않은 코드베이스 감사, 마이그레이션 전 스캔, 의미 있는 diff가 없는 디렉터리 등에 유용합니다. 비-git 디렉터리에서도 작동합니다 (`.gitignore`를 따르는 파일 시스템 탐색으로 폴백).
+
+| Flag | Shorthand | Default | Description |
+|------|-----------|---------|-------------|
+| `--path` | - | 전체 repo | 스캔할 쉼표 구분 디렉터리/파일 |
+| `--exclude` | - | - | 건너뛸 파일의 쉼표 구분 gitignore 스타일 패턴; rule.json의 excludes와 병합 |
+| `--preview` | `-p` | `false` | LLM 실행 없이 스캔 대상 파일 목록 표시 |
+| `--max-tokens-budget` | - | `0` (무제한) | 총 토큰 사용량 제한; 초과 시 dispatch 중단 |
+| `--no-plan` | - | `false` | 파일별 planning 사전 처리 건너뛰기 |
+| `--no-dedup` | - | `false` | 배치별 유사 comment 중복 제거 건너뛰기 |
+| `--no-summary` | - | `false` | 프로젝트 수준 요약 건너뛰기 |
+| `--batch` | - | `by-language` | 배치 전략: `none`, `by-language`, 또는 `by-directory` |
+| `--format` | `-f` | `text` | Output format: `text` 또는 `json` (JSON에 `project_summary` 필드 포함) |
+| `--concurrency` | - | `8` | 최대 동시 파일 스캔 수 |
+| `--rule` | - | - | custom JSON review rules 경로 |
+| `--repo` | - | current dir | 스캔할 repository 또는 디렉터리 루트 |
+
+각 실행 전에 `ocr scan`은 대략적인 토큰 비용 추정치를 출력합니다. `--preview`로 먼저 파일 목록을 확인하고, `--max-tokens-budget`으로 대규모 repository의 비용을 제한할 수 있습니다.
 
 ## Examples
 
@@ -404,6 +431,21 @@ ocr review --rule /path/to/my-rules.json
 # 파일에 적용될 rule 미리보기
 ocr rules check src/main/java/com/example/Foo.java
 ocr rules check --rule custom.json src/main/resources/mapper/UserMapper.xml
+
+# 전체 파일 스캔: 먼저 파일 목록 미리보기 (LLM call 없음)
+ocr scan --preview
+
+# 전체 repo 스캔, 비용을 ~500k 토큰으로 제한
+ocr scan --max-tokens-budget 500000
+
+# 하위 디렉터리 스캔, 생성/테스트 파일 건너뛰기
+ocr scan --path internal --exclude '**/*_test.go,**/generated/**'
+
+# 비-git 디렉터리를 JSON output으로 스캔 (project_summary 포함)
+ocr scan --repo /path/to/plain/dir --format json
+
+# 가장 빠른 스캔: planning, 중복 제거, 프로젝트 요약 건너뛰기
+ocr scan --no-plan --no-dedup --no-summary
 
 # browser에서 review session history 보기
 ocr viewer

@@ -35,7 +35,7 @@
 
 Open Code Review 是一款 AI 驱动的代码审查 CLI 工具。它的前身是阿里集团内部官方 AI 代码审查助手，过去两年在内部服务了数万开发者，识别了数百万个代码缺陷。经过大规模充分验证后，我们将其孵化为开源项目，对社区开放。只需配置一个模型端点即可使用。
 
-它读取 Git diff，通过具备工具调用能力的 Agent 将变更文件发送至可配置的 LLM，生成具有行级精度的结构化审查意见。Agent 可以读取完整文件内容、搜索代码库、检查其他变更文件以获取上下文，从而进行深度审查——而非仅停留在表面的 diff 反馈。
+它读取 Git diff，通过具备工具调用能力的 Agent 将变更文件发送至可配置的 LLM，生成具有行级精度的结构化审查意见。Agent 可以读取完整文件内容、搜索代码库、检查其他变更文件以获取上下文，从而进行深度审查——而非仅停留在表面的 diff 反馈。除了 diff 审查，`ocr scan` 可以审查整个文件，适用于审计不熟悉的代码库或没有有意义 diff 的目录。
 
 ![Highlights](imgs/highlights-zh.png)
 
@@ -227,6 +227,10 @@ ocr review --from main --to feature-branch
 
 # 单个提交
 ocr review --commit abc123
+
+# 全量文件扫描 —— 审查整个文件而非 diff（无需 git 历史）
+ocr scan                          # 扫描整个仓库
+ocr scan --path internal/agent    # 扫描指定目录或文件
 ```
 
 ### 集成到编程 Agent
@@ -336,7 +340,8 @@ ocr review \
 
 | 命令 | 别名 | 描述 |
 |------|------|------|
-| `ocr review` | `ocr r` | 开始代码审查 |
+| `ocr review` | `ocr r` | 开始基于 diff 的代码审查 |
+| `ocr scan` | `ocr s` | 审查整个文件（无需 diff） |
 | `ocr rules check <file>` | — | 预览某个文件路径生效的审查规则 |
 | `ocr config provider` | — | 交互式供应商设置（内置、自定义或手动） |
 | `ocr config model` | — | 为当前供应商交互式选择模型 |
@@ -355,6 +360,7 @@ ocr review \
 | `--from` | — | — | 源引用（如 `main`） |
 | `--to` | — | — | 目标引用（如 `feature-branch`） |
 | `--commit` | `-c` | — | 审查单个提交 |
+| `--exclude` | — | — | 以逗号分隔的 gitignore 风格模式，用于跳过匹配文件；与 rule.json 中的 excludes 合并 |
 | `--preview` | `-p` | `false` | 预览将被审查的文件列表，不调用 LLM |
 | `--format` | `-f` | `text` | 输出格式：`text` 或 `json` |
 | `--concurrency` | — | `8` | 最大并发文件审查数 |
@@ -366,6 +372,27 @@ ocr review \
 | `--max-tools` | — | 内置默认 | 每个文件的最大工具调用轮次；仅在大于模板默认值时生效 |
 | `--max-git-procs` | — | 内置默认 | 最大并发 git 子进程数 |
 | `--tools` | — | — | 自定义 JSON 工具配置路径 |
+
+### `ocr scan` 参数
+
+`ocr scan` 审查整个文件而非 diff —— 适用于审计不熟悉的代码库、迁移前扫描，或任何没有有意义 diff 的目录。它也可以在非 git 目录中工作（会回退到遵循 `.gitignore` 的文件系统遍历）。
+
+| 参数 | 缩写 | 默认值 | 描述 |
+|------|------|--------|------|
+| `--path` | — | 整个仓库 | 以逗号分隔的待扫描目录/文件 |
+| `--exclude` | — | — | 以逗号分隔的 gitignore 风格模式，用于跳过匹配文件；与 rule.json 中的 excludes 合并 |
+| `--preview` | `-p` | `false` | 列出将被扫描的文件，不运行 LLM |
+| `--max-tokens-budget` | — | `0`（无限制） | 限制总 token 使用量；超出后停止分发 |
+| `--no-plan` | — | `false` | 跳过按文件的规划预处理 |
+| `--no-dedup` | — | `false` | 跳过按批次的相似评论去重 |
+| `--no-summary` | — | `false` | 跳过项目级别的总结 |
+| `--batch` | — | `by-language` | 批处理策略：`none`、`by-language` 或 `by-directory` |
+| `--format` | `-f` | `text` | 输出格式：`text` 或 `json`（JSON 包含 `project_summary` 字段） |
+| `--concurrency` | — | `8` | 最大并发文件扫描数 |
+| `--rule` | — | — | 自定义 JSON 审查规则路径 |
+| `--repo` | — | 当前目录 | 要扫描的仓库或目录根路径 |
+
+每次运行前，`ocr scan` 会打印粗略的 token 费用估算。使用 `--preview` 先查看文件列表，使用 `--max-tokens-budget` 限制大型仓库的开销。
 
 ## 示例
 
@@ -404,6 +431,21 @@ ocr review --rule /path/to/my-rules.json
 # 预览某个文件路径生效的规则
 ocr rules check src/main/java/com/example/Foo.java
 ocr rules check --rule custom.json src/main/resources/mapper/UserMapper.xml
+
+# 全量文件扫描：先预览文件列表（不调用 LLM）
+ocr scan --preview
+
+# 扫描整个仓库，限制消耗约 500k token
+ocr scan --max-tokens-budget 500000
+
+# 扫描子目录，跳过生成的/测试文件
+ocr scan --path internal --exclude '**/*_test.go,**/generated/**'
+
+# 扫描非 git 目录，使用 JSON 输出（包含 project_summary）
+ocr scan --repo /path/to/plain/dir --format json
+
+# 最快扫描：跳过规划、去重和项目总结
+ocr scan --no-plan --no-dedup --no-summary
 
 # 在浏览器中查看审查会话历史
 ocr viewer

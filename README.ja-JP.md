@@ -35,7 +35,7 @@
 
 Open Code ReviewはAIを活用したコードレビューCLIツールです。もともとはAlibaba Group社内の公式AIコードレビューアシスタントとして誕生し、過去2年間で数万人の開発者にサービスを提供し、数百万件のコード欠陥を発見してきました。大規模な環境で徹底的に検証された後、コミュニティ向けのオープンソースプロジェクトとして公開されました。モデルのエンドポイントを設定するだけで使い始められます。
 
-Gitのdiffを読み取り、変更されたファイルをツール利用機能を持つエージェント経由で設定可能なLLMに送信し、行レベルの精度で構造化されたレビューコメントを生成します。エージェントはファイル全体の内容を読み取り、コードベースを検索し、コンテキストのために他の変更ファイルを参照し、深いレビューを生成できます — 単なる表面的なdiffへのフィードバックではありません。
+Gitのdiffを読み取り、変更されたファイルをツール利用機能を持つエージェント経由で設定可能なLLMに送信し、行レベルの精度で構造化されたレビューコメントを生成します。エージェントはファイル全体の内容を読み取り、コードベースを検索し、コンテキストのために他の変更ファイルを参照し、深いレビューを生成できます — 単なる表面的なdiffへのフィードバックではありません。diffレビュー以外にも、`ocr scan` はファイル全体をレビューできます。不慣れなコードベースの監査や、意味のあるdiffがないディレクトリの検査に便利です。
 
 ![Highlights](imgs/highlights-en.png)
 
@@ -227,6 +227,10 @@ ocr review --from main --to feature-branch
 
 # 単一コミット
 ocr review --commit abc123
+
+# フルファイルスキャン — diffではなくファイル全体をレビュー（git履歴不要）
+ocr scan                          # リポジトリ全体をスキャン
+ocr scan --path internal/agent    # ディレクトリまたは特定のファイルをスキャン
 ```
 
 ### コーディングエージェントとの統合
@@ -336,7 +340,8 @@ ocr review \
 
 | コマンド | エイリアス | 説明 |
 |---------|-------|-------------|
-| `ocr review` | `ocr r` | コードレビューを開始 |
+| `ocr review` | `ocr r` | diffベースのコードレビューを開始 |
+| `ocr scan` | `ocr s` | ファイル全体をレビュー（diff不要） |
 | `ocr rules check <file>` | — | ファイルパスに適用されるレビュールールをプレビュー |
 | `ocr config provider` | — | 対話的プロバイダーセットアップ（ビルトイン、カスタム、手動） |
 | `ocr config model` | — | アクティブなプロバイダーの対話的モデル選択 |
@@ -355,6 +360,7 @@ ocr review \
 | `--from` | — | — | ソースref（例：`main`） |
 | `--to` | — | — | ターゲットref（例：`feature-branch`） |
 | `--commit` | `-c` | — | レビュー対象の単一コミット |
+| `--exclude` | — | — | カンマ区切りのgitignoreスタイルパターンでスキップ対象を指定；rule.jsonのexcludesとマージ |
 | `--preview` | `-p` | `false` | LLMを実行せずにレビュー対象ファイルをプレビュー |
 | `--format` | `-f` | `text` | 出力形式：`text`または`json` |
 | `--concurrency` | — | `8` | ファイルレビューの最大同時実行数 |
@@ -366,6 +372,27 @@ ocr review \
 | `--max-tools` | — | 組み込み値 | ファイルごとのツール呼び出しラウンドの上限。テンプレートのデフォルトより大きい場合のみ有効 |
 | `--max-git-procs` | — | 組み込み値 | gitサブプロセスの最大同時実行数 |
 | `--tools` | — | — | カスタムJSONツール設定へのパス |
+
+### `ocr scan`のフラグ
+
+`ocr scan` はdiffではなくファイル全体をレビューします — 不慣れなコードベースの監査、マイグレーション前のスキャン、意味のあるdiffがないディレクトリなどに有用です。非gitディレクトリでも動作します（`.gitignore` を尊重するファイルシステムウォークにフォールバック）。
+
+| フラグ | 短縮形 | デフォルト | 説明 |
+|------|-----------|---------|-------------|
+| `--path` | — | リポジトリ全体 | カンマ区切りのスキャン対象ディレクトリ/ファイル |
+| `--exclude` | — | — | カンマ区切りのgitignoreスタイルパターンでスキップ対象を指定；rule.jsonのexcludesとマージ |
+| `--preview` | `-p` | `false` | LLMを実行せずにスキャン対象ファイルを一覧表示 |
+| `--max-tokens-budget` | — | `0`（無制限） | トークン使用量の上限；超過するとディスパッチを停止 |
+| `--no-plan` | — | `false` | ファイルごとのプランニング前処理をスキップ |
+| `--no-dedup` | — | `false` | バッチごとの類似コメント重複排除をスキップ |
+| `--no-summary` | — | `false` | プロジェクトレベルのサマリーをスキップ |
+| `--batch` | — | `by-language` | バッチ戦略：`none`、`by-language`、または `by-directory` |
+| `--format` | `-f` | `text` | 出力形式：`text` または `json`（JSONには `project_summary` フィールドを含む） |
+| `--concurrency` | — | `8` | 最大同時ファイルスキャン数 |
+| `--rule` | — | — | カスタムJSONレビュールールへのパス |
+| `--repo` | — | カレントディレクトリ | スキャン対象のリポジトリまたはディレクトリルート |
+
+各実行前に、`ocr scan` はおおまかなトークンコスト見積もりを表示します。`--preview` でまずファイルリストを確認し、`--max-tokens-budget` で大規模リポジトリの支出を制限できます。
 
 ## 例
 
@@ -404,6 +431,21 @@ ocr review --rule /path/to/my-rules.json
 # ファイルに適用されるルールをプレビュー
 ocr rules check src/main/java/com/example/Foo.java
 ocr rules check --rule custom.json src/main/resources/mapper/UserMapper.xml
+
+# フルファイルスキャン：まずファイルリストをプレビュー（LLM呼び出しなし）
+ocr scan --preview
+
+# リポジトリ全体をスキャン、支出を約500kトークンに制限
+ocr scan --max-tokens-budget 500000
+
+# サブディレクトリをスキャン、生成ファイル/テストファイルをスキップ
+ocr scan --path internal --exclude '**/*_test.go,**/generated/**'
+
+# 非gitディレクトリをJSON出力でスキャン（project_summaryを含む）
+ocr scan --repo /path/to/plain/dir --format json
+
+# 最速スキャン：プランニング、重複排除、プロジェクトサマリーをスキップ
+ocr scan --no-plan --no-dedup --no-summary
 
 # ブラウザでレビューセッション履歴を表示
 ocr viewer
