@@ -5,7 +5,6 @@
 #
 # Triggers:
 #   - PR opened (uses pull_request_target for fork secret access)
-#   - Comment on PR containing '/open-code-review' or '@open-code-review'
 #
 # Required secrets:
 #   OCR_LLM_URL        - LLM API endpoint (e.g., https://api.openai.com/v1/chat/completions)
