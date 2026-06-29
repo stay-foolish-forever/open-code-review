@@ -315,6 +315,12 @@ jobs:
                 await sleep(batchRetry.delayMs);
               }
 
+              // Cache for the per-comment idempotency check: a single paginated
+              // walk of listReviewComments covers all inline comments on the PR,
+              // so we reuse it across retries instead of re-walking on every 5xx.
+              // The cache is best-effort: if the read API fails, the check returns
+              // null (unknown) and the caller skips retrying that comment.
+              const postedIdsCache = { value: null };
               for (const { comment, reviewComment } of toRetry) {
                 let posted = false;
                 for (let attempt = 0; attempt <= MAX_RETRIES && !posted; attempt++) {
@@ -383,14 +389,28 @@ jobs:
                         owner: context.repo.owner,
                         repo: context.repo.repo,
                         prNumber,
-                        id
+                        id,
+                        postedIdsCache
                       });
-                      if (alreadyPosted) {
+                      if (alreadyPosted === true) {
                         successCount++;
                         posted = true;
                         console.log(`Comment for ${reviewComment.path} already posted (id=${id}); treating as success.`);
                         await sleep(SUCCESS_DELAY);
                         continue;
+                      }
+                      // Unknown (null): the read API is unavailable, so we
+                      // cannot tell whether the comment landed. To avoid a
+                      // duplicate, do NOT retry posting; record as failed so
+                      // the summary surfaces the uncertainty rather than
+                      // silently risking a duplicate.
+                      if (alreadyPosted === null) {
+                        failedCount++;
+                        const reason = 'idempotency check unavailable (read API failed)';
+                        failedComments.push({ comment, error: `${innerE.message} [${reason}]` });
+                        console.log(`Cannot verify whether comment for ${reviewComment.path} was posted (${reason}, HTTP ${innerE.status || 'n/a'}); skipping retry to avoid duplicate.`);
+                        await sleep(SUCCESS_DELAY);
+                        break;
                       }
                       // Not found on server. If retries are exhausted or the
                       // error is non-retryable, this is a real failure.
@@ -456,8 +476,13 @@ jobs:
                 issueNumber: prNumber,
                 id: SUMMARY_TAG
               });
-              if (summaryAlreadyPosted) {
+              if (summaryAlreadyPosted === true) {
                 console.log('Summary comment with this run tag already exists; skipping.');
+              } else if (summaryAlreadyPosted === null) {
+                // Read API unavailable: cannot tell whether the summary already
+                // landed. Skip posting to avoid a duplicate; the review content
+                // is still available via inline comments / batch review.
+                console.log('Cannot verify whether summary comment already exists (read API failed); skipping to avoid duplicate.');
               } else {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
@@ -517,16 +542,22 @@ jobs:
 
             // Paginated helper that walks all pages of a list endpoint with retry
             // and pacing. Returns the concatenated array of items.
-            async function readAllPages(tag, pageFn) {
+            async function readAllPages(tag, pageFn, maxPages = 50) {
+              if (!Number.isFinite(maxPages) || maxPages < 1) {
+                throw new Error(`readAllPages: maxPages must be a positive integer, got ${maxPages}`);
+              }
               const all = [];
               let page = 1;
               const PER_PAGE = 100;
-              while (true) {
+              while (page <= maxPages) {
                 const res = await readWithPacing(`${tag} (page ${page})`, () => pageFn(page, PER_PAGE));
                 const items = res.data || [];
                 all.push(...items);
                 if (items.length < PER_PAGE) break;
                 page++;
+              }
+              if (page > maxPages) {
+                console.log(`[${tag}] reached max page limit (${maxPages}); results may be incomplete.`);
               }
               return all;
             }
@@ -555,10 +586,19 @@ jobs:
                 github.rest.pulls.listReviewComments({ owner, repo, pull_number: prNumber, per_page, page })
               );
               const ids = new Set();
+              // Anchor the regex to the HTML comment wrapper (<!-- ocr-... -->)
+              // so user-generated content or code suggestions cannot trigger
+              // false positives in the idempotency check. The ID format is
+              // `ocr-<RUN_TAG>-<hash>` where RUN_TAG is `<runId>-<runAttempt>`.
+              // Capture group 1 holds the bare ID (ocr-<RUN_TAG>-<hash>),
+              // so we can add it directly without stripping comment markers.
+              const ID_RE = /<!--\s*(ocr-\d+-\d+-[a-f0-9]+)\s*-->/g;
               for (const c of comments) {
                 const body = c.body || '';
-                const matches = body.match(/ocr-\d+-\d+-[a-f0-9]+/g) || [];
-                for (const id of matches) ids.add(id);
+                let m;
+                while ((m = ID_RE.exec(body)) !== null) {
+                  ids.add(m[1]);
+                }
               }
               return ids;
             }
@@ -568,28 +608,51 @@ jobs:
             // fails with a transient 5xx/408, the request may have reached GitHub
             // and succeeded even though the response was lost. Querying before
             // retrying prevents posting a duplicate inline comment.
-            async function isCommentAlreadyPosted({ owner, repo, prNumber, id }) {
+            // Returns true/false when the check succeeds, or null when the
+            // read API is unavailable (rate limit, 5xx, etc.). Returning null
+            // (rather than defaulting to false) prevents the caller from
+            // assuming the comment was not posted and risking a duplicate on
+            // retry. `postedIdsCache` lets the caller reuse the result of a
+            // single paginated walk across multiple per-comment retries, so a
+            // degraded API episode does not amplify into N full walks.
+            async function isCommentAlreadyPosted({ owner, repo, prNumber, id, postedIdsCache }) {
               try {
-                const posted = await getPostedCommentIds({ owner, repo, prNumber });
+                let posted = postedIdsCache && postedIdsCache.value;
+                if (posted == null) {
+                  posted = await getPostedCommentIds({ owner, repo, prNumber });
+                  if (postedIdsCache) postedIdsCache.value = posted;
+                }
                 return posted.has(id);
               } catch (e) {
-                console.log(`[isCommentAlreadyPosted] check failed for ${id} (${e.message}); assuming not posted.`);
-                return false;
+                console.log(`[isCommentAlreadyPosted] check failed for ${id} (${e.message}); treating as unknown to avoid duplicates.`);
+                return null;
               }
             }
 
             // Check whether an issue comment with the given tag already exists.
             // Used to avoid posting a duplicate summary comment when the batch
             // review already carried the same summary body.
+            // Returns true/false when the check succeeds, or null when the
+            // read API is unavailable. Returning null (rather than defaulting
+            // to false) lets the caller decide whether to skip posting or
+            // degrade gracefully, instead of silently risking a duplicate
+            // summary comment.
             async function hasIssueCommentWithId({ owner, repo, issueNumber, id }) {
               try {
                 const comments = await readAllPages('listIssueComments', (page, per_page) =>
                   github.rest.issues.listComments({ owner, repo, issue_number: issueNumber, per_page, page })
                 );
-                return comments.some(c => (c.body || '').includes(id));
+                // Match the tag anchored to its HTML comment wrapper for
+                // consistency with getPostedCommentIds and to defend against
+                // user content that happens to contain the bare tag string.
+                // `id` is an opaque tag like `<!-- ocr-summary-run:... -->`,
+                // so escape any regex metacharacters before embedding it.
+                const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const tagRe = new RegExp('<!--\\s*' + escaped + '\\s*-->');
+                return comments.some(c => tagRe.test(c.body || ''));
               } catch (e) {
-                console.log(`[listIssueComments] check failed (${e.message}); assuming not posted.`);
-                return false;
+                console.log(`[listIssueComments] check failed (${e.message}); treating as unknown to avoid duplicates.`);
+                return null;
               }
             }
 
