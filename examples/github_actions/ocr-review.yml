@@ -285,14 +285,22 @@ jobs:
             const failedComments = [];
 
             // Retry/pacing configuration (shared by write and read API calls).
-            const MAX_RETRIES = parseInt(process.env.OCR_MAX_RETRIES, 10) || 3;
-            const SUCCESS_DELAY = parseInt(process.env.OCR_SUCCESS_DELAY, 10) || 2000; // delay after successful write
-            const FAILURE_DELAY = parseInt(process.env.OCR_FAILURE_DELAY, 10) || 1000; // delay after non-retryable failure
-            const LOW_REMAINING_THRESHOLD = parseInt(process.env.OCR_LOW_REMAINING_THRESHOLD, 10) || 3;
-            const LOW_REMAINING_SPACING = parseInt(process.env.OCR_LOW_REMAINING_SPACING, 10) || 10000;
+            // parseNonNegInt guards against nonsensical env values (negative,
+            // NaN, non-numeric) that `parseInt(...) || default` would let
+            // through for negative numbers, since a negative parseInt result
+            // is truthy and would bypass the `|| default` fallback.
+            function parseNonNegInt(val, defaultVal) {
+              const n = parseInt(val, 10);
+              return Number.isFinite(n) && n >= 0 ? n : defaultVal;
+            }
+            const MAX_RETRIES = parseNonNegInt(process.env.OCR_MAX_RETRIES, 3);
+            const SUCCESS_DELAY = parseNonNegInt(process.env.OCR_SUCCESS_DELAY, 2000); // delay after successful write
+            const FAILURE_DELAY = parseNonNegInt(process.env.OCR_FAILURE_DELAY, 1000); // delay after non-retryable failure
+            const LOW_REMAINING_THRESHOLD = parseNonNegInt(process.env.OCR_LOW_REMAINING_THRESHOLD, 3);
+            const LOW_REMAINING_SPACING = parseNonNegInt(process.env.OCR_LOW_REMAINING_SPACING, 10000);
             // Read APIs are cheaper and have higher thresholds; use shorter pacing.
-            const READ_SUCCESS_DELAY = parseInt(process.env.OCR_READ_SUCCESS_DELAY, 10) || 500;
-            const READ_LOW_REMAINING_SPACING = parseInt(process.env.OCR_READ_LOW_REMAINING_SPACING, 10) || 5000;
+            const READ_SUCCESS_DELAY = parseNonNegInt(process.env.OCR_READ_SUCCESS_DELAY, 500);
+            const READ_LOW_REMAINING_SPACING = parseNonNegInt(process.env.OCR_READ_LOW_REMAINING_SPACING, 5000);
 
             try {
               const batchRes = await github.rest.pulls.createReview({
@@ -602,6 +610,16 @@ jobs:
                 if (items.length < PER_PAGE) break;
                 page++;
               }
+              // NOTE: Truncation here is intentional and acceptable. The cap
+              // exists as a safety valve against unbounded loops (e.g. a bug
+              // or malicious activity), not as a normal operating mode. A PR
+              // accumulating >5000 review comments is far outside expected
+              // usage; in that rare case we log a warning and proceed with
+              // partial data rather than failing the whole review. Callers
+              // that depend on completeness (isCommentAlreadyPosted,
+              // hasIssueCommentWithId) already degrade safely by returning
+              // null (unknown) on read failures, so a truncated walk does not
+              // silently produce duplicates.
               if (page > maxPages) {
                 console.log(`[${tag}] reached max page limit (${maxPages}); results may be incomplete.`);
               }
@@ -830,6 +848,13 @@ jobs:
             // already landed on the server. suggestion_code is intentionally
             // excluded from the fingerprint: it may drift on minor reformatting
             // while the review point itself stays the same.
+            //
+            // The hash is truncated to 12 hex chars (48 bits). The collision
+            // scope is a single PR (listReviewComments is PR-scoped), and in
+            // practice a single run produces only tens to hundreds of comments,
+            // so the birthday-bound collision probability is negligible
+            // (~1e-7 even at 10k comments per PR). A longer hash would add
+            // noise to comment bodies without meaningful safety gain.
             function commentId(comment) {
               const fingerprint = [
                 comment.path || '',
