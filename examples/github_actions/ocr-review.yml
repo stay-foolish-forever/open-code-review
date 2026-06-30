@@ -849,12 +849,11 @@ jobs:
             // excluded from the fingerprint: it may drift on minor reformatting
             // while the review point itself stays the same.
             //
-            // The hash is truncated to 12 hex chars (48 bits). The collision
-            // scope is a single PR (listReviewComments is PR-scoped), and in
-            // practice a single run produces only tens to hundreds of comments,
-            // so the birthday-bound collision probability is negligible
-            // (~1e-7 even at 10k comments per PR). A longer hash would add
-            // noise to comment bodies without meaningful safety gain.
+            // The full 64-char (256-bit) sha256 hex digest is used as the hash.
+            // The collision scope is a single PR (listReviewComments is
+            // PR-scoped); a full-length hash makes the collision probability
+            // effectively zero, so the idempotency check never risks treating
+            // two distinct comments as duplicates.
             function commentId(comment) {
               const fingerprint = [
                 comment.path || '',
@@ -862,7 +861,7 @@ jobs:
                 comment.end_line != null ? String(comment.end_line) : '',
                 comment.content || ''
               ].join('|');
-              const hash = crypto.createHash('sha256').update(fingerprint).digest('hex').slice(0, 12);
+              const hash = crypto.createHash('sha256').update(fingerprint).digest('hex');
               return `ocr-${RUN_TAG}-${hash}`;
             }
 
