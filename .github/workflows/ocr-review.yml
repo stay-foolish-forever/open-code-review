@@ -311,12 +311,6 @@ jobs:
                 await sleep(batchRetry.delayMs);
               }
 
-              // Cache for the per-comment idempotency check: a single paginated
-              // walk of listReviewComments covers all inline comments on the PR,
-              // so we reuse it across retries instead of re-walking on every 5xx.
-              // The cache is best-effort: if the read API fails, the check returns
-              // null (unknown) and the caller skips retrying that comment.
-              const postedIdsCache = { value: null };
               for (const item of toRetry) {
                 const { comment, id } = item;
                 let posted = false;
@@ -385,8 +379,7 @@ jobs:
                         owner: context.repo.owner,
                         repo: context.repo.repo,
                         prNumber,
-                        id,
-                        postedIdsCache
+                        id
                       });
                       if (alreadyPosted === true) {
                         successCount++;
@@ -626,16 +619,17 @@ jobs:
             // read API is unavailable (rate limit, 5xx, etc.). Returning null
             // (rather than defaulting to false) prevents the caller from
             // assuming the comment was not posted and risking a duplicate on
-            // retry. `postedIdsCache` lets the caller reuse the result of a
-            // single paginated walk across multiple per-comment retries, so a
-            // degraded API episode does not amplify into N full walks.
-            async function isCommentAlreadyPosted({ owner, repo, prNumber, id, postedIdsCache }) {
+            // retry.
+            //
+            // Each call walks listReviewComments fresh — no cached snapshot.
+            // A snapshot reused across retries would go stale as comments land
+            // during the loop, and a stale miss for a 5xx-landed comment would
+            // trigger a retry that posts a duplicate. Read calls are paced via
+            // readAllPages/readWithPacing and degrade to null (skip retry) if the
+            // read API itself fails, so the extra walks cannot produce duplicates.
+            async function isCommentAlreadyPosted({ owner, repo, prNumber, id }) {
               try {
-                let posted = postedIdsCache && postedIdsCache.value;
-                if (posted == null) {
-                  posted = await getPostedCommentIds({ owner, repo, prNumber });
-                  if (postedIdsCache) postedIdsCache.value = posted;
-                }
+                const posted = await getPostedCommentIds({ owner, repo, prNumber });
                 return posted.has(id);
               } catch (e) {
                 console.log(`[isCommentAlreadyPosted] check failed for ${id} (${e.message}); treating as unknown to avoid duplicates.`);
