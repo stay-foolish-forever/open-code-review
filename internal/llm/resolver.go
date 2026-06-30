@@ -22,7 +22,11 @@ type ResolvedEndpoint struct {
 	Source       string            // human-readable config source label
 	ExtraBody    map[string]any    // vendor-specific request body fields
 	ExtraHeaders map[string]string // extra HTTP headers for the LLM request
-	Timeout      time.Duration     // per-request HTTP timeout; 0 means use default (5 min)
+	// Timeout is the per-request HTTP timeout; 0 means use the client default (5 min).
+	// Only config file (llm/provider sections) and OCR_LLM_TIMEOUT env var can set this.
+	// tryCCEnv and tryShellRC always leave it at 0 since those sources have no timeout
+	// knob; users can still override via OCR_LLM_TIMEOUT.
+	Timeout time.Duration
 }
 
 // Environment variable names for OCR-specific configuration.
@@ -32,8 +36,12 @@ const (
 	envOCRLLMModel        = "OCR_LLM_MODEL"
 	envOCRLLMAuthHeader   = "OCR_LLM_AUTH_HEADER"
 	envOCRLLMExtraHeaders = "OCR_LLM_EXTRA_HEADERS"
-	envOCRLLMTimeout      = "OCR_LLM_TIMEOUT"
-	envOCRUseAnthropic    = "OCR_USE_ANTHROPIC"
+	// envOCRLLMTimeout is a global override applied in ResolveEndpointWithModelOverride
+	// after any strategy resolves, rather than inside tryOCREnv like other OCR_LLM_* vars.
+	// This lets it override timeout for all resolution paths (OCR env, config file,
+	// provider config, Claude Code env, shell RC).
+	envOCRLLMTimeout   = "OCR_LLM_TIMEOUT"
+	envOCRUseAnthropic = "OCR_USE_ANTHROPIC"
 )
 
 // Environment variable names from Claude Code configuration.
@@ -184,7 +192,7 @@ type llmFileConfig struct {
 	AuthHeader   string            `json:"auth_header,omitempty"`
 	Model        string            `json:"model,omitempty"`
 	UseAnthropic *bool             `json:"use_anthropic,omitempty"` // pointer to distinguish unset from false
-	TimeoutSec   int               `json:"timeout_sec,omitempty"`  // per-request HTTP timeout in seconds
+	TimeoutSec   int               `json:"timeout_sec,omitempty"`   // per-request HTTP timeout in seconds
 	ExtraBody    map[string]any    `json:"extra_body,omitempty"`
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
 }
