@@ -552,16 +552,23 @@ jobs:
                 if (items.length < PER_PAGE) break;
                 page++;
               }
-              // NOTE: Truncation here is intentional and acceptable. The cap
-              // exists as a safety valve against unbounded loops (e.g. a bug
-              // or malicious activity), not as a normal operating mode. A PR
-              // accumulating >5000 review comments is far outside expected
-              // usage; in that rare case we log a warning and proceed with
-              // partial data rather than failing the whole review. Callers
-              // that depend on completeness (isCommentAlreadyPosted,
-              // hasIssueCommentWithId) already degrade safely by returning
-              // null (unknown) on read failures, so a truncated walk does not
-              // silently produce duplicates.
+              // NOTE: Truncation here is intentional and acts as a safety
+              // valve against unbounded loops (e.g. a bug or malicious
+              // activity), not as a normal operating mode. A PR accumulating
+              // >5000 review comments is far outside expected usage; in that
+              // rare case we log a warning and proceed with partial data
+              // rather than failing the whole review.
+              //
+              // Caveat: this is NOT the same as a read failure. When the read
+              // API throws (rate limit, 5xx), isCommentAlreadyPosted and
+              // hasIssueCommentWithId catch it and return null (unknown), so
+              // the caller skips retrying and creates no duplicate. A
+              // truncated walk does not throw; it returns a partial set
+              // silently, so isCommentAlreadyPosted returns false (definitively
+              // "not posted") for any comment beyond the cap, and the retry
+              // loop will repost it, producing a duplicate. This tradeoff is
+              // accepted because the trigger is far outside expected usage; if
+              // that ceiling ever needs to rise, make maxPages configurable.
               if (page > maxPages) {
                 console.log(`[${tag}] reached max page limit (${maxPages}); results may be incomplete.`);
               }
