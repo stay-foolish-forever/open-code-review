@@ -117,7 +117,7 @@ These variables are optional — if not configured, sensible defaults are used. 
 
 #### Idempotency: avoiding duplicate review comments
 
-When the batch `createReview` call fails with a `5xx` error, the request may still have landed on the GitHub server (the response was simply lost). Before retrying per-comment, the workflow queries existing reviews and review comments — each tagged with a per-run HTML comment (e.g. `<!-- ocr-<runId>-<attempt>-<hash> -->`) — and only retries the comments that are actually missing. This prevents duplicate review posts.
+When the batch `createReview` call fails with a `5xx` error, the request may still have landed on the GitHub server (the response was simply lost). Before retrying per-comment, the workflow queries existing reviews and review comments — each tagged with a per-run HTML comment (e.g. `<!-- ocr-<runId>-<attempt>-<token> -->`) — and only retries the comments that are actually missing. This prevents duplicate review posts.
 
 The same idempotency check is applied to the summary comment: before posting, the workflow verifies whether a summary with the same run tag already exists, and skips posting if so.
 

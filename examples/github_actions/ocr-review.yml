@@ -235,35 +235,23 @@ jobs:
             const commentsWithoutLine = [];
 
             for (const comment of comments) {
-              const body = formatComment(comment);
-
               // Check if comment has valid line information for inline comment (line >= 1)
               const hasValidLine = (comment.start_line >= 1) || (comment.end_line >= 1);
               if (!hasValidLine) {
-                commentsWithoutLine.push({ comment, body });
+                commentsWithoutLine.push({ comment });
                 continue;
               }
 
-              const reviewComment = {
-                path: comment.path,
-                body: body
-              };
-
-              // Use line range if available
-              if (comment.start_line >= 1 && comment.end_line >= 1 && comment.start_line !== comment.end_line) {
-                reviewComment.start_line = comment.start_line;
-                reviewComment.line = comment.end_line;
-                reviewComment.start_side = 'RIGHT';
-                reviewComment.side = 'RIGHT';
-              } else if (comment.end_line >= 1) {
-                reviewComment.line = comment.end_line;
-                reviewComment.side = 'RIGHT';
-              } else if (comment.start_line >= 1) {
-                reviewComment.line = comment.start_line;
-                reviewComment.side = 'RIGHT';
-              }
-
-              reviewComments.push({ comment, reviewComment });
+              // Each inline comment becomes an item carrying a random ID
+              // (assigned once) and its resolved line targeting. The body is
+              // built from item.id only at API-call time (see toReviewPayload),
+              // so retry/idempotency logic reads item.id directly instead of
+              // recomputing it, and distinct comments never share an ID.
+              reviewComments.push({
+                comment,
+                id: newCommentId(),
+                lines: resolveLines(comment)
+              });
             }
 
             // Submit as a single PR review with all comments
@@ -310,7 +298,7 @@ jobs:
                 commit_id: commitSha,
                 body: summaryBody,
                 event: 'COMMENT',
-                comments: reviewComments.map(({ reviewComment }) => reviewComment)
+                comments: reviewComments.map(toReviewPayload)
               });
               successCount = reviewComments.length;
               console.log(`Successfully posted review with ${successCount} inline comments (${commentsWithoutLine.length} in summary)`);
@@ -345,8 +333,8 @@ jobs:
                   repo: context.repo.repo,
                   prNumber
                 });
-                toRetry = reviewComments.filter(({ comment }) =>
-                  !postedIds.has(commentId(comment))
+                toRetry = reviewComments.filter((item) =>
+                  !postedIds.has(item.id)
                 );
                 successCount = reviewComments.length - toRetry.length;
                 console.log(`Batch review already exists (review_id=${existingReview.review.id}). ` +
@@ -375,7 +363,8 @@ jobs:
               // The cache is best-effort: if the read API fails, the check returns
               // null (unknown) and the caller skips retrying that comment.
               const postedIdsCache = { value: null };
-              for (const { comment, reviewComment } of toRetry) {
+              for (const item of toRetry) {
+                const { comment, id } = item;
                 let posted = false;
                 for (let attempt = 0; attempt <= MAX_RETRIES && !posted; attempt++) {
                   try {
@@ -386,14 +375,14 @@ jobs:
                       commit_id: commitSha,
                       body: '',
                       event: 'COMMENT',
-                      comments: [reviewComment]
+                      comments: [toReviewPayload(item)]
                     });
                     successCount++;
                     posted = true;
-                    console.log(`Successfully posted comment for ${reviewComment.path}`);
+                    console.log(`Successfully posted comment for ${comment.path}`);
                     // Proactive throttle: if remaining quota is low, slow down to
                     // avoid hitting the limit (GitHub best practice: watch the header).
-                    const remaining = logRateLimitQuota(res, `after ${reviewComment.path}`);
+                    const remaining = logRateLimitQuota(res, `after ${comment.path}`);
                     const lowQuota = remaining != null && remaining <= LOW_REMAINING_THRESHOLD;
                     if (lowQuota) {
                       console.log(`[rate-limit] quota low (remaining=${remaining} <= ${LOW_REMAINING_THRESHOLD}); increasing spacing to ${LOW_REMAINING_SPACING}ms.`);
@@ -433,12 +422,11 @@ jobs:
                       if (coolDownMs > 0) {
                         const secs = (coolDownMs / 1000).toFixed(1);
                         console.log(
-                          `Cooling down ${secs}s before idempotency check for ${reviewComment.path} ` +
+                          `Cooling down ${secs}s before idempotency check for ${comment.path} ` +
                           `(HTTP ${innerE.status || 'n/a'}, attempt ${attempt + 1}/${MAX_RETRIES + 1}).`
                         );
                         await sleep(coolDownMs);
                       }
-                      const id = commentId(comment);
                       const alreadyPosted = await isCommentAlreadyPosted({
                         owner: context.repo.owner,
                         repo: context.repo.repo,
@@ -449,7 +437,7 @@ jobs:
                       if (alreadyPosted === true) {
                         successCount++;
                         posted = true;
-                        console.log(`Comment for ${reviewComment.path} already posted (id=${id}); treating as success.`);
+                        console.log(`Comment for ${comment.path} already posted (id=${id}); treating as success.`);
                         await sleep(SUCCESS_DELAY);
                         continue;
                       }
@@ -462,7 +450,7 @@ jobs:
                         failedCount++;
                         const reason = 'idempotency check unavailable (read API failed)';
                         failedComments.push({ comment, error: `${innerE.message} [${reason}]` });
-                        console.log(`Cannot verify whether comment for ${reviewComment.path} was posted (${reason}, HTTP ${innerE.status || 'n/a'}); skipping retry to avoid duplicate.`);
+                        console.log(`Cannot verify whether comment for ${comment.path} was posted (${reason}, HTTP ${innerE.status || 'n/a'}); skipping retry to avoid duplicate.`);
                         await sleep(SUCCESS_DELAY);
                         break;
                       }
@@ -472,7 +460,7 @@ jobs:
                         failedCount++;
                         failedComments.push({ comment, error: innerE.message });
                         const reason = retryInfo == null ? 'non-retryable error' : 'rate-limit retries exhausted';
-                        console.log(`Failed to post comment for ${reviewComment.path} (${reason}, HTTP ${innerE.status || 'n/a'}): ${innerE.message}`);
+                        console.log(`Failed to post comment for ${comment.path} (${reason}, HTTP ${innerE.status || 'n/a'}): ${innerE.message}`);
                         await sleep(SUCCESS_DELAY);
                         break;
                       }
@@ -483,7 +471,7 @@ jobs:
                       // check can be skipped. Just honor the retry delay.
                       const secs = (retryInfo.delayMs / 1000).toFixed(1);
                       console.log(
-                        `Rate-limited on ${reviewComment.path} ` +
+                        `Rate-limited on ${comment.path} ` +
                         `(HTTP ${innerE.status}, attempt ${attempt + 1}/${MAX_RETRIES}). ` +
                         `Waiting ${secs}s via '${retryInfo.source}' (${retryInfo.detail}). ` +
                         `Error: ${innerE.message}`
@@ -494,7 +482,7 @@ jobs:
                       // server (e.g. 4xx validation error): record as failed.
                       failedCount++;
                       failedComments.push({ comment, error: innerE.message });
-                      console.log(`Failed to post comment for ${reviewComment.path} (non-retryable error, HTTP ${innerE.status || 'n/a'}): ${innerE.message}`);
+                      console.log(`Failed to post comment for ${comment.path} (non-retryable error, HTTP ${innerE.status || 'n/a'}): ${innerE.message}`);
                       await sleep(FAILURE_DELAY);
                       break;
                     }
@@ -653,9 +641,10 @@ jobs:
               // Anchor the regex to the HTML comment wrapper (<!-- ocr-... -->)
               // so user-generated content or code suggestions cannot trigger
               // false positives in the idempotency check. The ID format is
-              // `ocr-<RUN_TAG>-<hash>` where RUN_TAG is `<runId>-<runAttempt>`.
-              // Capture group 1 holds the bare ID (ocr-<RUN_TAG>-<hash>),
-              // so we can add it directly without stripping comment markers.
+              // `ocr-<RUN_TAG>-<random>` where RUN_TAG is `<runId>-<runAttempt>`
+              // and <random> is a per-comment random hex token. Capture group 1
+              // holds the bare ID (ocr-<RUN_TAG>-<random>), so we can add it
+              // directly without stripping comment markers.
               const ID_RE = /<!--\s*(ocr-\d+-\d+-[a-f0-9]+)\s*-->/g;
               for (const c of comments) {
                 const body = c.body || '';
@@ -825,44 +814,56 @@ jobs:
               } catch (_) { return null; }
             }
 
-            function formatComment(comment) {
-              // Prepend a comment-level unique tag (HTML comment, invisible when
-              // rendered) so the idempotency check can match individual inline
-              // comments even when multiple comments target the same path/line.
-              const id = commentId(comment);
+            // Random per-comment ID, assigned once when the inline-comment item
+            // is built and carried on the item struct. Random (rather than
+            // content-derived) so two distinct comments that share the same
+            // path/line/content still get different IDs and the idempotency
+            // check never mistakes one for the other (which would silently drop
+            // the second). Embedded in the comment body as an HTML comment so
+            // getPostedCommentIds can match it back on retry.
+            function newCommentId() {
+              return `ocr-${RUN_TAG}-${crypto.randomBytes(8).toString('hex')}`;
+            }
+
+            // Resolve the line-targeting fields for a createReview comment
+            // payload (start_line/line/start_side/side) from the comment's line
+            // range. Returned object is spread into the payload in toReviewPayload.
+            function resolveLines(comment) {
+              const start = comment.start_line;
+              const end = comment.end_line;
+              if (start >= 1 && end >= 1 && start !== end) {
+                return { start_line: start, line: end, start_side: 'RIGHT', side: 'RIGHT' };
+              } else if (end >= 1) {
+                return { line: end, side: 'RIGHT' };
+              } else if (start >= 1) {
+                return { line: start, side: 'RIGHT' };
+              }
+              return {};
+            }
+
+            // Build the createReview payload for an inline-comment item. The
+            // body is assembled here (at call time) from the item's precomputed
+            // ID, so retry/idempotency logic works directly off item.id instead
+            // of recomputing an ID each time it needs to check posting status.
+            function toReviewPayload(item) {
+              return {
+                path: item.comment.path,
+                body: buildBody(item.comment, item.id),
+                ...item.lines
+              };
+            }
+
+            // Assemble the visible comment body: the per-comment ID tag (HTML
+            // comment, invisible when rendered) prepended for idempotency
+            // matching, plus the code suggestion block if present.
+            function buildBody(comment, id) {
               let body = `<!-- ${id} -->\n`;
               body += comment.content || '';
-
-              // Add code suggestion if available
               if (comment.suggestion_code && comment.existing_code) {
                 body += '\n\n**Suggestion:**\n';
                 body += fencedBlock(comment.suggestion_code, 'suggestion');
               }
-
               return body;
-            }
-
-            // Stable unique ID for a comment, derived from path + line range +
-            // content hash. Stable across retries (same input => same ID) so the
-            // idempotency check can match a retried comment against the one that
-            // already landed on the server. suggestion_code is intentionally
-            // excluded from the fingerprint: it may drift on minor reformatting
-            // while the review point itself stays the same.
-            //
-            // The full 64-char (256-bit) sha256 hex digest is used as the hash.
-            // The collision scope is a single PR (listReviewComments is
-            // PR-scoped); a full-length hash makes the collision probability
-            // effectively zero, so the idempotency check never risks treating
-            // two distinct comments as duplicates.
-            function commentId(comment) {
-              const fingerprint = [
-                comment.path || '',
-                comment.start_line != null ? String(comment.start_line) : '',
-                comment.end_line != null ? String(comment.end_line) : '',
-                comment.content || ''
-              ].join('|');
-              const hash = crypto.createHash('sha256').update(fingerprint).digest('hex');
-              return `ocr-${RUN_TAG}-${hash}`;
             }
 
             function formatCommentMarkdown(comment, error) {
